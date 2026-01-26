@@ -4,38 +4,25 @@ AI Resume Analyzer - Production-Grade ATS System
 """
 
 import streamlit as st
+
+# ============================================================================
+# PAGE CONFIG - MUST BE THE ABSOLUTE FIRST STREAMLIT COMMAND
+# ============================================================================
+
+st.set_page_config(
+    page_title="AI Resume Analyzer",
+    page_icon="📄",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ============================================================================
+# NOW IMPORT EVERYTHING ELSE
+# ============================================================================
+
 import os
 import sys
-
-# ============================================================================
-# NLTK SETUP - MUST BE FIRST
-# ============================================================================
-
 import nltk
-
-NLTK_DATA_PATH = os.path.join(os.path.expanduser('~'), 'nltk_data')
-os.makedirs(NLTK_DATA_PATH, exist_ok=True)
-nltk.data.path.insert(0, NLTK_DATA_PATH)
-
-@st.cache_resource
-def download_nltk_data():
-    """Download NLTK data once and cache it."""
-    resources = ['punkt', 'punkt_tab', 'stopwords', 'wordnet', 
-                 'averaged_perceptron_tagger', 'omw-1.4']
-    for resource in resources:
-        try:
-            nltk.download(resource, download_dir=NLTK_DATA_PATH, quiet=True)
-        except:
-            pass
-    return True
-
-# Download at startup
-download_nltk_data()
-
-# ============================================================================
-# OTHER IMPORTS
-# ============================================================================
-
 import PyPDF2
 import io
 import re
@@ -54,6 +41,27 @@ from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 import datetime
 from dataclasses import dataclass
 import logging
+
+# ============================================================================
+# NLTK SETUP
+# ============================================================================
+
+NLTK_DATA_PATH = os.path.join(os.path.expanduser('~'), 'nltk_data')
+os.makedirs(NLTK_DATA_PATH, exist_ok=True)
+nltk.data.path.insert(0, NLTK_DATA_PATH)
+
+def download_nltk_data():
+    """Download NLTK data."""
+    resources = ['punkt', 'punkt_tab', 'stopwords', 'wordnet', 
+                 'averaged_perceptron_tagger', 'omw-1.4']
+    for resource in resources:
+        try:
+            nltk.download(resource, download_dir=NLTK_DATA_PATH, quiet=True)
+        except:
+            pass
+
+# Download at startup (without Streamlit decorator)
+download_nltk_data()
 
 # Try to import NLTK components with fallbacks
 try:
@@ -340,13 +348,11 @@ class TextProcessor:
     
     def __init__(self):
         """Initialize the text processor."""
-        # Use NLTK stopwords if available, otherwise fallback
         if NLTK_STOPWORDS:
             self.stop_words = NLTK_STOPWORDS.copy()
         else:
             self.stop_words = FALLBACK_STOPWORDS.copy()
         
-        # Add custom stop words
         custom_stop_words = {
             'resume', 'cv', 'curriculum', 'vitae', 'page', 'phone', 'email',
             'address', 'linkedin', 'github', 'portfolio', 'objective',
@@ -357,8 +363,6 @@ class TextProcessor:
             'august', 'september', 'october', 'november', 'december'
         }
         self.stop_words.update(custom_stop_words)
-        
-        # Lemmatizer
         self.lemmatizer = NLTK_LEMMATIZER
     
     def extract_text_from_pdf(self, pdf_file) -> str:
@@ -367,12 +371,12 @@ class TextProcessor:
             pdf_reader = PyPDF2.PdfReader(pdf_file)
             text_content = []
             
-            for page_num, page in enumerate(pdf_reader.pages):
+            for page in pdf_reader.pages:
                 try:
                     page_text = page.extract_text()
                     if page_text:
                         text_content.append(page_text)
-                except Exception as e:
+                except:
                     continue
             
             return ' '.join(text_content)
@@ -394,23 +398,26 @@ class TextProcessor:
         
         return text
     
+    def simple_tokenize(self, text: str) -> List[str]:
+        """Simple tokenization fallback."""
+        return text.split()
+    
     def tokenize_and_lemmatize(self, text: str) -> List[str]:
         """Tokenize text and apply lemmatization."""
-        # Tokenize - try NLTK first, then fallback to simple split
-        if NLTK_TOKENIZE:
-            try:
+        # Try NLTK tokenizer, fall back to simple split
+        try:
+            if NLTK_TOKENIZE:
                 from nltk.tokenize import word_tokenize
                 tokens = word_tokenize(text)
-            except:
-                tokens = text.split()
-        else:
-            tokens = text.split()
+            else:
+                tokens = self.simple_tokenize(text)
+        except:
+            tokens = self.simple_tokenize(text)
         
         lemmatized_tokens = []
         for token in tokens:
             if token not in self.stop_words and len(token) > 1:
                 if not token.isdigit():
-                    # Try to lemmatize
                     if self.lemmatizer:
                         try:
                             lemmatized_token = self.lemmatizer.lemmatize(token)
@@ -554,33 +561,27 @@ class ATSEngine:
     
     def analyze(self, resume_text: str, job_description: str) -> AnalysisResult:
         """Perform comprehensive resume analysis against job description."""
-        # Extract skills
         resume_skills = self.skill_extractor.extract_skills(resume_text)
         jd_skills = self.skill_extractor.extract_skills(job_description)
         
-        # Calculate skill matches
         matched_skills = resume_skills.intersection(jd_skills)
         missing_skills = jd_skills - resume_skills
         resume_only_skills = resume_skills - jd_skills
         
-        # Calculate scores
         skill_match_score = self._calculate_skill_match_score(matched_skills, jd_skills)
         content_similarity_score = self._calculate_content_similarity(resume_text, job_description)
         keyword_match_score, matched_keywords = self._calculate_keyword_match(resume_text, job_description)
         
-        # Calculate overall score
         overall_score = (
             skill_match_score * Config.SKILL_MATCH_WEIGHT +
             content_similarity_score * Config.CONTENT_SIMILARITY_WEIGHT +
             keyword_match_score * Config.KEYWORD_DENSITY_WEIGHT
         )
         
-        # Generate insights
         strengths = self._generate_strengths(matched_skills, content_similarity_score, resume_skills)
         weaknesses = self._generate_weaknesses(missing_skills, overall_score)
         recommendations = self._generate_recommendations(missing_skills, overall_score, matched_skills)
         
-        # Categorize skills
         skill_categories = self.skill_extractor.categorize_skills(matched_skills)
         missing_categories = self.skill_extractor.categorize_skills(missing_skills)
         
@@ -619,7 +620,7 @@ class ATSEngine:
             similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
             
             return similarity * 100
-        except Exception as e:
+        except:
             return 0.0
     
     def _calculate_keyword_match(self, resume: str, job_desc: str) -> Tuple[float, List[str]]:
@@ -648,14 +649,20 @@ class ATSEngine:
             strengths.append(f"Strong skill alignment with {len(matched_skills)} matching skills")
         elif len(matched_skills) >= 5:
             strengths.append(f"Good skill coverage with {len(matched_skills)} matching skills")
+        elif len(matched_skills) >= 1:
+            strengths.append(f"Found {len(matched_skills)} matching skills from job requirements")
         
         if similarity_score >= 70:
             strengths.append("Excellent content relevance to job description")
         elif similarity_score >= 50:
             strengths.append("Good content alignment with job requirements")
+        elif similarity_score >= 30:
+            strengths.append("Moderate content alignment with job description")
         
         if len(all_resume_skills) >= 20:
             strengths.append(f"Diverse skill portfolio with {len(all_resume_skills)} total skills")
+        elif len(all_resume_skills) >= 10:
+            strengths.append(f"Solid skill set with {len(all_resume_skills)} identified skills")
         
         high_demand = {'python', 'javascript', 'aws', 'docker', 'kubernetes', 'machine learning'}
         found_high_demand = matched_skills.intersection(high_demand)
@@ -675,6 +682,8 @@ class ATSEngine:
             weaknesses.append(f"Missing {len(missing_skills)} skills mentioned in job description")
         elif len(missing_skills) > 5:
             weaknesses.append(f"Could improve coverage on {len(missing_skills)} required skills")
+        elif len(missing_skills) > 0:
+            weaknesses.append(f"Missing {len(missing_skills)} skills from job requirements")
         
         if overall_score < Config.FAIR_SCORE:
             weaknesses.append("Overall alignment with job requirements needs improvement")
@@ -708,6 +717,9 @@ class ATSEngine:
             if priority_missing:
                 top_skills = list(priority_missing)[:5]
                 recommendations.append(f"Consider adding these key skills: {', '.join(top_skills)}")
+            elif missing_skills:
+                top_missing = list(missing_skills)[:5]
+                recommendations.append(f"Consider highlighting these skills: {', '.join(top_missing)}")
         
         if overall_score < Config.GOOD_SCORE:
             recommendations.append("Tailor resume content more closely to the job description")
@@ -875,7 +887,7 @@ class ReportGenerator:
             for category, skills in result.skill_categories.items():
                 story.append(Paragraph(f"<b>{category}:</b>", self.styles['SubsectionHeader']))
                 skills_text = ", ".join(sorted(skills))
-                story.append(Paragraph(f"• {skills_text}", self.styles['BulletPoint']))
+                story.append(Paragraph(f"* {skills_text}", self.styles['BulletPoint']))
         else:
             story.append(Paragraph("No matching skills found.", self.styles['BodyText']))
         story.append(Spacer(1, 20))
@@ -895,7 +907,7 @@ class ReportGenerator:
             for category, skills in result.missing_categories.items():
                 story.append(Paragraph(f"<b>{category}:</b>", self.styles['SubsectionHeader']))
                 skills_text = ", ".join(sorted(skills))
-                story.append(Paragraph(f"• {skills_text}", self.styles['BulletPoint']))
+                story.append(Paragraph(f"* {skills_text}", self.styles['BulletPoint']))
         else:
             story.append(Paragraph("All required skills are present!", self.styles['BodyText']))
         story.append(Spacer(1, 20))
@@ -906,7 +918,7 @@ class ReportGenerator:
         story.append(Spacer(1, 10))
         
         for strength in result.strengths:
-            story.append(Paragraph(f"✓ {strength}", self.styles['BulletPoint']))
+            story.append(Paragraph(f"+ {strength}", self.styles['BulletPoint']))
         story.append(Spacer(1, 20))
         
         # Weaknesses
@@ -915,7 +927,7 @@ class ReportGenerator:
         story.append(Spacer(1, 10))
         
         for weakness in result.weaknesses:
-            story.append(Paragraph(f"⚠ {weakness}", self.styles['BulletPoint']))
+            story.append(Paragraph(f"- {weakness}", self.styles['BulletPoint']))
         story.append(Spacer(1, 20))
         
         # Recommendations
@@ -964,18 +976,11 @@ class ReportGenerator:
 
 
 # ============================================================================
-# STREAMLIT UI
+# STREAMLIT UI FUNCTIONS
 # ============================================================================
 
-def setup_page():
-    """Configure Streamlit page settings."""
-    st.set_page_config(
-        page_title=Config.APP_TITLE,
-        page_icon=Config.APP_ICON,
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
+def apply_custom_css():
+    """Apply custom CSS styling."""
     st.markdown("""
     <style>
         .main { background-color: #0e1117; }
@@ -1079,10 +1084,6 @@ def setup_page():
             background: linear-gradient(90deg, transparent, #16213e, transparent);
             margin: 2rem 0;
         }
-        
-        #MainMenu {visibility: hidden;}
-        footer {visibility: hidden;}
-        header {visibility: hidden;}
     </style>
     """, unsafe_allow_html=True)
 
@@ -1304,17 +1305,28 @@ def display_sidebar():
         """)
 
 
+# ============================================================================
+# MAIN APPLICATION
+# ============================================================================
+
 def main():
     """Main application entry point."""
-    setup_page()
+    # Apply custom CSS
+    apply_custom_css()
+    
+    # Display header
     display_header()
+    
+    # Display sidebar
     display_sidebar()
     
+    # Initialize session state
     if 'analysis_result' not in st.session_state:
         st.session_state.analysis_result = None
     if 'resume_name' not in st.session_state:
         st.session_state.resume_name = None
     
+    # Main content area
     col1, col2 = st.columns([1, 1])
     
     with col1:
@@ -1337,14 +1349,16 @@ def main():
     
     st.markdown("---")
     
-    analyze_col1, analyze_col2, analyze_col3 = st.columns([1, 2, 1])
-    with analyze_col2:
+    # Analyze button
+    col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
+    with col_btn2:
         analyze_button = st.button(
             "🔍 Analyze Resume",
             use_container_width=True,
             type="primary"
         )
     
+    # Process analysis
     if analyze_button:
         if not uploaded_file:
             st.error("⚠️ Please upload a resume PDF file")
@@ -1359,7 +1373,7 @@ def main():
                     resume_text = text_processor.extract_text_from_pdf(uploaded_file)
                     
                     if not resume_text or len(resume_text.strip()) < 50:
-                        st.error("⚠️ Could not extract sufficient text from the PDF.")
+                        st.error("⚠️ Could not extract sufficient text from the PDF. Please ensure your resume is text-based.")
                     else:
                         result = ats_engine.analyze(resume_text, job_description)
                         
@@ -1371,6 +1385,7 @@ def main():
             except Exception as e:
                 st.error(f"❌ An error occurred during analysis: {str(e)}")
     
+    # Display results if available
     if st.session_state.analysis_result:
         result = st.session_state.analysis_result
         
@@ -1403,6 +1418,9 @@ def main():
                 st.metric("Matched Keywords", len(result.matched_keywords))
 
 
+# ============================================================================
+# RUN APPLICATION
+# ============================================================================
+
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
     main()
