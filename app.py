@@ -1,1275 +1,827 @@
 """
-================================================================================
-AI RESUME ANALYZER - PRODUCTION QUALITY ATS SYSTEM
-================================================================================
-A flagship portfolio project demonstrating advanced NLP, document processing,
-and machine learning techniques for resume-job description matching.
+AI Resume Analyzer - Production-Grade ATS System
+================================================
+A comprehensive resume analysis tool that matches resumes against job descriptions
+using NLP techniques including TF-IDF vectorization and cosine similarity scoring.
 
-Author: AI Resume Analyzer Team
+Author: Senior AI Engineer
 Version: 1.0.0
 License: MIT
-================================================================================
 """
 
-# =============================================================================
-# IMPORTS AND DEPENDENCIES
-# =============================================================================
-
 import streamlit as st
+import PyPDF2
 import io
 import re
 import string
-import tempfile
-from datetime import datetime
-from typing import Dict, List, Tuple, Optional, Set
-from dataclasses import dataclass, field
 from collections import Counter
-import warnings
-
-# PDF Processing
-import pdfplumber
-from PyPDF2 import PdfReader
-
-# NLP Libraries
-import nltk
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
+from typing import Dict, List, Tuple, Optional, Set
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-import numpy as np
-
-# PDF Report Generation
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.platypus import (
-    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    PageBreak, Image, HRFlowable
-)
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+from reportlab.platypus import HRFlowable, ListFlowable, ListItem
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_JUSTIFY
+import datetime
+import base64
+from dataclasses import dataclass
+from enum import Enum
+import logging
 
-# Suppress warnings
-warnings.filterwarnings('ignore')
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
 
-# =============================================================================
-# NLTK DATA DOWNLOAD (Required for first run)
-# =============================================================================
+class Config:
+    """Application configuration settings."""
+    APP_TITLE = "AI Resume Analyzer"
+    APP_ICON = "📄"
+    APP_DESCRIPTION = "Professional ATS-Style Resume Analysis System"
+    VERSION = "1.0.0"
+    
+    # Scoring weights
+    SKILL_MATCH_WEIGHT = 0.4
+    CONTENT_SIMILARITY_WEIGHT = 0.35
+    KEYWORD_DENSITY_WEIGHT = 0.25
+    
+    # Thresholds
+    EXCELLENT_SCORE = 80
+    GOOD_SCORE = 60
+    FAIR_SCORE = 40
+    
+    # TF-IDF settings
+    TFIDF_MAX_FEATURES = 5000
+    TFIDF_NGRAM_RANGE = (1, 2)
+    
+    # Report settings
+    COMPANY_NAME = "AI Resume Analyzer"
+    REPORT_AUTHOR = "ATS Analysis Engine"
 
-@st.cache_resource
-def download_nltk_data():
-    """Download required NLTK data packages."""
-    packages = ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger', 'punkt_tab']
-    for package in packages:
-        try:
-            nltk.download(package, quiet=True)
-        except Exception:
-            pass
-    return True
 
-# Initialize NLTK data
-download_nltk_data()
-
-# =============================================================================
-# DATA: COMPREHENSIVE SKILLS DATABASE
-# =============================================================================
+# ============================================================================
+# SKILLS DATABASE
+# ============================================================================
 
 class SkillsDatabase:
     """
-    Comprehensive skills database containing technical skills, soft skills,
-    tools, frameworks, and industry-specific terminology.
+    Comprehensive skills database organized by category.
+    Contains 500+ skills across multiple domains for accurate matching.
     """
     
-    # Programming Languages
-    PROGRAMMING_LANGUAGES: Set[str] = {
-        'python', 'java', 'javascript', 'typescript', 'c++', 'c#', 'c',
-        'ruby', 'go', 'golang', 'rust', 'swift', 'kotlin', 'scala',
-        'php', 'perl', 'r', 'matlab', 'julia', 'haskell', 'erlang',
-        'elixir', 'clojure', 'f#', 'objective-c', 'dart', 'lua',
-        'groovy', 'cobol', 'fortran', 'assembly', 'vba', 'sql',
-        'plsql', 'tsql', 'bash', 'powershell', 'shell', 'solidity'
+    PROGRAMMING_LANGUAGES = {
+        "python", "java", "javascript", "typescript", "c++", "c#", "c",
+        "ruby", "php", "swift", "kotlin", "go", "golang", "rust", "scala",
+        "perl", "r", "matlab", "julia", "dart", "lua", "haskell", "erlang",
+        "clojure", "elixir", "f#", "visual basic", "vba", "cobol", "fortran",
+        "assembly", "groovy", "objective-c", "shell", "bash", "powershell",
+        "sql", "plsql", "tsql", "nosql", "graphql"
     }
     
-    # Web Technologies
-    WEB_TECHNOLOGIES: Set[str] = {
-        'html', 'html5', 'css', 'css3', 'sass', 'scss', 'less',
-        'bootstrap', 'tailwind', 'tailwindcss', 'materialize',
-        'jquery', 'ajax', 'json', 'xml', 'rest', 'restful',
-        'graphql', 'websocket', 'webrtc', 'pwa', 'spa', 'ssr',
-        'responsive design', 'web accessibility', 'wcag', 'seo'
+    WEB_TECHNOLOGIES = {
+        "html", "html5", "css", "css3", "sass", "scss", "less", "bootstrap",
+        "tailwind", "tailwindcss", "jquery", "react", "reactjs", "react.js",
+        "angular", "angularjs", "vue", "vuejs", "vue.js", "svelte", "nextjs",
+        "next.js", "nuxt", "nuxtjs", "gatsby", "webpack", "babel", "npm",
+        "yarn", "pnpm", "vite", "rollup", "parcel", "gulp", "grunt",
+        "express", "expressjs", "nodejs", "node.js", "node", "deno", "bun",
+        "django", "flask", "fastapi", "pyramid", "tornado", "aiohttp",
+        "spring", "spring boot", "springboot", "hibernate", "struts",
+        "asp.net", "asp.net core", ".net", ".net core", "blazor",
+        "ruby on rails", "rails", "sinatra", "laravel", "symfony", "codeigniter",
+        "rest", "restful", "rest api", "soap", "grpc", "websocket", "ajax",
+        "json", "xml", "yaml", "jwt", "oauth", "oauth2", "openid"
     }
     
-    # Frontend Frameworks
-    FRONTEND_FRAMEWORKS: Set[str] = {
-        'react', 'reactjs', 'react.js', 'angular', 'angularjs',
-        'vue', 'vuejs', 'vue.js', 'svelte', 'ember', 'emberjs',
-        'backbone', 'backbonejs', 'next.js', 'nextjs', 'nuxt',
-        'nuxtjs', 'gatsby', 'redux', 'mobx', 'vuex', 'ngrx',
-        'material-ui', 'mui', 'ant design', 'chakra ui', 'styled-components'
+    DATABASES = {
+        "mysql", "postgresql", "postgres", "sqlite", "oracle", "sql server",
+        "mssql", "mariadb", "mongodb", "cassandra", "couchdb", "couchbase",
+        "dynamodb", "redis", "memcached", "elasticsearch", "solr",
+        "neo4j", "arangodb", "firebase", "firestore", "supabase",
+        "cockroachdb", "timescaledb", "influxdb", "clickhouse", "snowflake",
+        "bigquery", "redshift", "data warehouse", "data lake", "etl",
+        "database design", "database optimization", "indexing", "sharding",
+        "replication", "acid", "cap theorem"
     }
     
-    # Backend Frameworks
-    BACKEND_FRAMEWORKS: Set[str] = {
-        'django', 'flask', 'fastapi', 'express', 'expressjs',
-        'node', 'nodejs', 'node.js', 'spring', 'spring boot',
-        'springboot', 'rails', 'ruby on rails', 'laravel',
-        'symfony', 'asp.net', '.net', '.net core', 'dotnet',
-        'gin', 'echo', 'fiber', 'actix', 'rocket', 'phoenix',
-        'koa', 'nestjs', 'hapi', 'tornado', 'pyramid', 'bottle',
-        'aiohttp', 'sanic', 'starlette', 'quart'
+    CLOUD_PLATFORMS = {
+        "aws", "amazon web services", "azure", "microsoft azure", "gcp",
+        "google cloud", "google cloud platform", "heroku", "digitalocean",
+        "linode", "vultr", "oracle cloud", "ibm cloud", "alibaba cloud",
+        "ec2", "s3", "lambda", "cloudfront", "route53", "rds", "dynamodb",
+        "sqs", "sns", "kinesis", "emr", "redshift", "athena", "glue",
+        "cloudformation", "cdk", "sam", "elastic beanstalk", "ecs", "eks",
+        "fargate", "app runner", "lightsail", "amplify",
+        "azure functions", "azure devops", "azure sql", "cosmos db",
+        "cloud functions", "cloud run", "app engine", "compute engine",
+        "cloud storage", "bigquery", "dataflow", "pubsub", "vertex ai"
     }
     
-    # Databases
-    DATABASES: Set[str] = {
-        'mysql', 'postgresql', 'postgres', 'mongodb', 'redis',
-        'sqlite', 'oracle', 'sql server', 'mssql', 'mariadb',
-        'cassandra', 'dynamodb', 'couchdb', 'couchbase', 'neo4j',
-        'elasticsearch', 'opensearch', 'influxdb', 'timescaledb',
-        'cockroachdb', 'firestore', 'firebase', 'supabase',
-        'prisma', 'sequelize', 'typeorm', 'mongoose', 'sqlalchemy',
-        'hibernate', 'jpa', 'entity framework', 'dapper'
+    DEVOPS_TOOLS = {
+        "docker", "kubernetes", "k8s", "openshift", "rancher", "helm",
+        "terraform", "ansible", "puppet", "chef", "saltstack", "vagrant",
+        "jenkins", "gitlab ci", "github actions", "circleci", "travis ci",
+        "bamboo", "teamcity", "azure pipelines", "argocd", "flux",
+        "prometheus", "grafana", "datadog", "new relic", "splunk",
+        "elk stack", "elasticsearch", "logstash", "kibana", "fluentd",
+        "nagios", "zabbix", "pagerduty", "opsgenie",
+        "nginx", "apache", "haproxy", "traefik", "envoy", "istio",
+        "consul", "vault", "etcd", "zookeeper",
+        "git", "github", "gitlab", "bitbucket", "svn", "mercurial",
+        "ci/cd", "continuous integration", "continuous deployment",
+        "infrastructure as code", "iac", "gitops", "devsecops", "sre"
     }
     
-    # Cloud Platforms & Services
-    CLOUD_PLATFORMS: Set[str] = {
-        'aws', 'amazon web services', 'azure', 'microsoft azure',
-        'gcp', 'google cloud', 'google cloud platform', 'heroku',
-        'digitalocean', 'linode', 'vultr', 'cloudflare', 'vercel',
-        'netlify', 'railway', 'render', 'fly.io', 'oracle cloud',
-        'ibm cloud', 'alibaba cloud', 'openstack'
+    DATA_SCIENCE_ML = {
+        "machine learning", "deep learning", "artificial intelligence", "ai",
+        "neural networks", "natural language processing", "nlp",
+        "computer vision", "image processing", "speech recognition",
+        "reinforcement learning", "supervised learning", "unsupervised learning",
+        "tensorflow", "keras", "pytorch", "torch", "scikit-learn", "sklearn",
+        "xgboost", "lightgbm", "catboost", "random forest", "decision tree",
+        "gradient boosting", "svm", "support vector machine", "naive bayes",
+        "linear regression", "logistic regression", "clustering", "k-means",
+        "pca", "dimensionality reduction", "feature engineering",
+        "model training", "hyperparameter tuning", "cross-validation",
+        "pandas", "numpy", "scipy", "matplotlib", "seaborn", "plotly",
+        "jupyter", "jupyter notebook", "google colab", "kaggle",
+        "hugging face", "transformers", "bert", "gpt", "llm", "langchain",
+        "openai", "stable diffusion", "generative ai", "rag",
+        "mlops", "mlflow", "kubeflow", "sagemaker", "vertex ai",
+        "data analysis", "data visualization", "statistical analysis",
+        "a/b testing", "hypothesis testing", "time series", "forecasting",
+        "recommendation systems", "anomaly detection", "sentiment analysis"
     }
     
-    # AWS Services
-    AWS_SERVICES: Set[str] = {
-        'ec2', 'ecs', 'eks', 'lambda', 's3', 'rds', 'dynamodb',
-        'cloudfront', 'route53', 'vpc', 'iam', 'cognito', 'sns',
-        'sqs', 'kinesis', 'redshift', 'athena', 'glue', 'emr',
-        'sagemaker', 'cloudwatch', 'cloudformation', 'cdk',
-        'api gateway', 'step functions', 'eventbridge', 'secrets manager'
+    MOBILE_DEVELOPMENT = {
+        "ios", "android", "react native", "flutter", "xamarin", "ionic",
+        "cordova", "phonegap", "swift", "swiftui", "uikit", "objective-c",
+        "kotlin", "java android", "jetpack compose", "android studio",
+        "xcode", "cocoapods", "gradle", "mobile app development",
+        "app store", "google play", "push notifications", "mobile ui/ux",
+        "responsive design", "pwa", "progressive web app"
     }
     
-    # DevOps & Infrastructure
-    DEVOPS_TOOLS: Set[str] = {
-        'docker', 'kubernetes', 'k8s', 'helm', 'terraform',
-        'ansible', 'puppet', 'chef', 'vagrant', 'packer',
-        'jenkins', 'gitlab ci', 'github actions', 'circleci',
-        'travis ci', 'bamboo', 'teamcity', 'argocd', 'spinnaker',
-        'prometheus', 'grafana', 'datadog', 'splunk', 'elk',
-        'elasticsearch', 'logstash', 'kibana', 'fluentd', 'loki',
-        'jaeger', 'zipkin', 'opentelemetry', 'nagios', 'zabbix',
-        'nginx', 'apache', 'haproxy', 'traefik', 'envoy', 'istio',
-        'consul', 'vault', 'etcd', 'rancher', 'openshift'
+    TESTING = {
+        "unit testing", "integration testing", "e2e testing", "end-to-end testing",
+        "test automation", "selenium", "cypress", "playwright", "puppeteer",
+        "jest", "mocha", "chai", "jasmine", "karma", "pytest", "unittest",
+        "junit", "testng", "mockito", "rspec", "capybara",
+        "postman", "insomnia", "api testing", "load testing", "jmeter",
+        "gatling", "locust", "performance testing", "stress testing",
+        "tdd", "test-driven development", "bdd", "behavior-driven development",
+        "qa", "quality assurance", "manual testing", "regression testing",
+        "smoke testing", "sanity testing", "uat", "user acceptance testing"
     }
     
-    # Data Science & Machine Learning
-    DATA_SCIENCE: Set[str] = {
-        'machine learning', 'ml', 'deep learning', 'dl', 'neural networks',
-        'artificial intelligence', 'ai', 'data science', 'data analysis',
-        'data analytics', 'data mining', 'data visualization',
-        'statistical analysis', 'predictive modeling', 'nlp',
-        'natural language processing', 'computer vision', 'cv',
-        'reinforcement learning', 'supervised learning', 'unsupervised learning',
-        'feature engineering', 'model optimization', 'hyperparameter tuning',
-        'a/b testing', 'experimentation', 'time series analysis',
-        'recommendation systems', 'anomaly detection', 'clustering',
-        'classification', 'regression', 'ensemble methods'
+    SOFT_SKILLS = {
+        "communication", "leadership", "teamwork", "collaboration",
+        "problem solving", "problem-solving", "critical thinking",
+        "analytical skills", "creativity", "innovation", "adaptability",
+        "flexibility", "time management", "project management",
+        "agile", "scrum", "kanban", "waterfall", "jira", "confluence",
+        "trello", "asana", "monday", "notion", "slack",
+        "presentation", "public speaking", "negotiation", "mentoring",
+        "coaching", "decision making", "strategic thinking", "planning",
+        "organization", "attention to detail", "multitasking",
+        "customer service", "client relations", "stakeholder management",
+        "cross-functional", "remote work", "self-motivated", "proactive"
     }
     
-    # Data Science Libraries & Frameworks
-    DATA_SCIENCE_TOOLS: Set[str] = {
-        'pandas', 'numpy', 'scipy', 'scikit-learn', 'sklearn',
-        'tensorflow', 'keras', 'pytorch', 'torch', 'jax',
-        'xgboost', 'lightgbm', 'catboost', 'statsmodels', 'spacy',
-        'nltk', 'gensim', 'huggingface', 'transformers', 'bert',
-        'gpt', 'opencv', 'pillow', 'matplotlib', 'seaborn',
-        'plotly', 'bokeh', 'altair', 'd3', 'd3.js', 'tableau',
-        'power bi', 'looker', 'metabase', 'superset', 'dbt',
-        'airflow', 'luigi', 'prefect', 'dagster', 'mlflow',
-        'kubeflow', 'weights & biases', 'wandb', 'optuna',
-        'ray', 'dask', 'spark', 'pyspark', 'hadoop', 'hive',
-        'flink', 'kafka', 'beam', 'streamlit', 'gradio', 'dash'
+    SECURITY = {
+        "cybersecurity", "information security", "network security",
+        "application security", "cloud security", "devsecops",
+        "penetration testing", "ethical hacking", "vulnerability assessment",
+        "siem", "soc", "incident response", "threat modeling",
+        "encryption", "ssl", "tls", "https", "oauth", "saml", "sso",
+        "identity management", "iam", "rbac", "access control",
+        "firewall", "ids", "ips", "vpn", "zero trust",
+        "owasp", "security auditing", "compliance", "gdpr", "hipaa", "pci-dss",
+        "soc2", "iso 27001", "nist", "risk assessment"
     }
     
-    # Mobile Development
-    MOBILE_DEVELOPMENT: Set[str] = {
-        'ios', 'android', 'react native', 'flutter', 'xamarin',
-        'ionic', 'cordova', 'phonegap', 'swift', 'swiftui',
-        'uikit', 'kotlin', 'jetpack compose', 'room', 'retrofit',
-        'realm', 'core data', 'firebase', 'push notifications',
-        'mobile app development', 'cross-platform', 'hybrid apps',
-        'app store optimization', 'aso', 'mobile ui', 'mobile ux'
+    DESIGN_TOOLS = {
+        "figma", "sketch", "adobe xd", "invision", "zeplin", "framer",
+        "photoshop", "illustrator", "after effects", "premiere pro",
+        "indesign", "lightroom", "canva", "gimp", "inkscape", "blender",
+        "ui design", "ux design", "ui/ux", "user interface", "user experience",
+        "wireframing", "prototyping", "mockups", "design systems",
+        "typography", "color theory", "visual design", "graphic design",
+        "responsive design", "accessibility", "wcag", "a11y"
     }
     
-    # Testing & QA
-    TESTING: Set[str] = {
-        'unit testing', 'integration testing', 'e2e testing',
-        'end-to-end testing', 'automated testing', 'manual testing',
-        'test automation', 'tdd', 'bdd', 'qa', 'quality assurance',
-        'selenium', 'cypress', 'playwright', 'puppeteer', 'jest',
-        'mocha', 'chai', 'jasmine', 'karma', 'pytest', 'unittest',
-        'junit', 'testng', 'robot framework', 'cucumber', 'postman',
-        'insomnia', 'soapui', 'jmeter', 'locust', 'gatling',
-        'load testing', 'performance testing', 'security testing',
-        'penetration testing', 'code coverage', 'sonarqube'
+    BUSINESS_TOOLS = {
+        "excel", "microsoft excel", "google sheets", "powerpoint",
+        "microsoft word", "google docs", "google slides",
+        "tableau", "power bi", "looker", "metabase", "superset",
+        "salesforce", "hubspot", "zendesk", "freshdesk", "intercom",
+        "sap", "oracle erp", "workday", "quickbooks", "netsuite",
+        "google analytics", "adobe analytics", "mixpanel", "amplitude",
+        "segment", "hotjar", "google tag manager", "data studio",
+        "marketing automation", "crm", "erp", "business intelligence"
     }
     
-    # Version Control & Collaboration
-    VERSION_CONTROL: Set[str] = {
-        'git', 'github', 'gitlab', 'bitbucket', 'svn', 'subversion',
-        'mercurial', 'perforce', 'azure devops', 'tfs',
-        'version control', 'source control', 'branching strategies',
-        'gitflow', 'trunk-based development', 'code review',
-        'pull requests', 'merge requests', 'ci/cd', 'continuous integration',
-        'continuous deployment', 'continuous delivery'
-    }
-    
-    # Agile & Project Management
-    AGILE_PM: Set[str] = {
-        'agile', 'scrum', 'kanban', 'lean', 'waterfall',
-        'sprint planning', 'retrospective', 'standup', 'daily scrum',
-        'product backlog', 'user stories', 'epics', 'story points',
-        'velocity', 'burndown chart', 'jira', 'confluence', 'trello',
-        'asana', 'monday.com', 'notion', 'linear', 'clickup',
-        'project management', 'program management', 'pmo',
-        'stakeholder management', 'risk management', 'sdlc',
-        'requirements gathering', 'technical documentation'
-    }
-    
-    # Security
-    SECURITY: Set[str] = {
-        'cybersecurity', 'information security', 'infosec',
-        'network security', 'application security', 'appsec',
-        'owasp', 'security audit', 'vulnerability assessment',
-        'penetration testing', 'ethical hacking', 'soc',
-        'siem', 'ids', 'ips', 'firewall', 'waf', 'vpn',
-        'ssl', 'tls', 'https', 'encryption', 'cryptography',
-        'authentication', 'authorization', 'oauth', 'oauth2',
-        'saml', 'sso', 'jwt', 'mfa', '2fa', 'rbac', 'abac',
-        'zero trust', 'devsecops', 'security compliance',
-        'gdpr', 'hipaa', 'pci-dss', 'soc2', 'iso27001'
-    }
-    
-    # Architecture & Design Patterns
-    ARCHITECTURE: Set[str] = {
-        'microservices', 'monolithic', 'serverless', 'event-driven',
-        'domain-driven design', 'ddd', 'clean architecture',
-        'hexagonal architecture', 'cqrs', 'event sourcing',
-        'api design', 'system design', 'software architecture',
-        'enterprise architecture', 'solution architecture',
-        'design patterns', 'solid principles', 'dry', 'kiss',
-        'yagni', 'mvc', 'mvvm', 'mvp', 'repository pattern',
-        'factory pattern', 'singleton', 'observer pattern',
-        'dependency injection', 'inversion of control', 'ioc'
-    }
-    
-    # Soft Skills
-    SOFT_SKILLS: Set[str] = {
-        'leadership', 'team leadership', 'people management',
-        'communication', 'verbal communication', 'written communication',
-        'presentation skills', 'public speaking', 'storytelling',
-        'problem solving', 'problem-solving', 'critical thinking',
-        'analytical thinking', 'analytical skills', 'decision making',
-        'strategic thinking', 'strategic planning', 'innovation',
-        'creativity', 'adaptability', 'flexibility', 'resilience',
-        'time management', 'prioritization', 'organization',
-        'attention to detail', 'multitasking', 'self-motivated',
-        'self-starter', 'proactive', 'initiative', 'ownership',
-        'accountability', 'teamwork', 'collaboration', 'team player',
-        'cross-functional', 'interpersonal skills', 'relationship building',
-        'stakeholder management', 'client management', 'customer focus',
-        'customer service', 'negotiation', 'conflict resolution',
-        'emotional intelligence', 'empathy', 'mentoring', 'coaching',
-        'training', 'knowledge sharing', 'continuous learning',
-        'growth mindset', 'fast learner', 'quick learner'
-    }
-    
-    # Business & Domain Skills
-    BUSINESS_SKILLS: Set[str] = {
-        'business analysis', 'business development', 'sales',
-        'marketing', 'digital marketing', 'content marketing',
-        'product management', 'product development', 'product strategy',
-        'market research', 'competitive analysis', 'swot analysis',
-        'financial analysis', 'budgeting', 'forecasting', 'roi',
-        'kpi', 'okr', 'metrics', 'data-driven', 'analytics',
-        'reporting', 'dashboards', 'visualization', 'insights',
-        'strategy', 'operations', 'process improvement', 'optimization',
-        'automation', 'efficiency', 'scalability', 'growth',
-        'revenue', 'profit', 'cost reduction', 'vendor management',
-        'supply chain', 'logistics', 'ecommerce', 'fintech',
-        'healthtech', 'edtech', 'saas', 'b2b', 'b2c', 'startup'
-    }
-    
-    # Certifications (commonly mentioned)
-    CERTIFICATIONS: Set[str] = {
-        'aws certified', 'aws solutions architect', 'aws developer',
-        'azure certified', 'azure administrator', 'azure developer',
-        'gcp certified', 'google cloud certified', 'cka', 'ckad',
-        'terraform certified', 'kubernetes certified', 'docker certified',
-        'pmp', 'prince2', 'itil', 'six sigma', 'scrum master',
-        'csm', 'psm', 'safe', 'cspo', 'cissp', 'cism', 'cisa',
-        'comptia', 'security+', 'network+', 'ccna', 'ccnp',
-        'rhce', 'rhcsa', 'lpic', 'oracle certified', 'java certified',
-        'microsoft certified', 'mcse', 'mcsa', 'data engineer',
-        'machine learning certified', 'tensorflow certified'
+    ARCHITECTURE = {
+        "microservices", "monolithic", "serverless", "event-driven",
+        "domain-driven design", "ddd", "clean architecture", "hexagonal",
+        "mvc", "mvvm", "mvp", "solid principles", "design patterns",
+        "singleton", "factory", "observer", "strategy", "decorator",
+        "api design", "api gateway", "service mesh", "message queue",
+        "rabbitmq", "kafka", "apache kafka", "activemq", "celery",
+        "distributed systems", "high availability", "scalability",
+        "load balancing", "caching", "cdn", "performance optimization",
+        "system design", "technical architecture", "solution architecture"
     }
     
     @classmethod
     def get_all_skills(cls) -> Set[str]:
-        """Returns a combined set of all skills from all categories."""
+        """Returns a set of all skills across all categories."""
         all_skills = set()
-        all_skills.update(cls.PROGRAMMING_LANGUAGES)
-        all_skills.update(cls.WEB_TECHNOLOGIES)
-        all_skills.update(cls.FRONTEND_FRAMEWORKS)
-        all_skills.update(cls.BACKEND_FRAMEWORKS)
-        all_skills.update(cls.DATABASES)
-        all_skills.update(cls.CLOUD_PLATFORMS)
-        all_skills.update(cls.AWS_SERVICES)
-        all_skills.update(cls.DEVOPS_TOOLS)
-        all_skills.update(cls.DATA_SCIENCE)
-        all_skills.update(cls.DATA_SCIENCE_TOOLS)
-        all_skills.update(cls.MOBILE_DEVELOPMENT)
-        all_skills.update(cls.TESTING)
-        all_skills.update(cls.VERSION_CONTROL)
-        all_skills.update(cls.AGILE_PM)
-        all_skills.update(cls.SECURITY)
-        all_skills.update(cls.ARCHITECTURE)
-        all_skills.update(cls.SOFT_SKILLS)
-        all_skills.update(cls.BUSINESS_SKILLS)
-        all_skills.update(cls.CERTIFICATIONS)
+        for attr_name in dir(cls):
+            attr = getattr(cls, attr_name)
+            if isinstance(attr, set):
+                all_skills.update(attr)
         return all_skills
     
     @classmethod
-    def get_skill_categories(cls) -> Dict[str, Set[str]]:
-        """Returns a dictionary mapping category names to skill sets."""
-        return {
-            'Programming Languages': cls.PROGRAMMING_LANGUAGES,
-            'Web Technologies': cls.WEB_TECHNOLOGIES,
-            'Frontend Frameworks': cls.FRONTEND_FRAMEWORKS,
-            'Backend Frameworks': cls.BACKEND_FRAMEWORKS,
-            'Databases': cls.DATABASES,
-            'Cloud Platforms': cls.CLOUD_PLATFORMS,
-            'AWS Services': cls.AWS_SERVICES,
-            'DevOps & Infrastructure': cls.DEVOPS_TOOLS,
-            'Data Science & ML': cls.DATA_SCIENCE,
-            'Data Science Tools': cls.DATA_SCIENCE_TOOLS,
-            'Mobile Development': cls.MOBILE_DEVELOPMENT,
-            'Testing & QA': cls.TESTING,
-            'Version Control': cls.VERSION_CONTROL,
-            'Agile & Project Management': cls.AGILE_PM,
-            'Security': cls.SECURITY,
-            'Architecture': cls.ARCHITECTURE,
-            'Soft Skills': cls.SOFT_SKILLS,
-            'Business Skills': cls.BUSINESS_SKILLS,
-            'Certifications': cls.CERTIFICATIONS
+    def get_skill_category(cls, skill: str) -> Optional[str]:
+        """Returns the category of a given skill."""
+        skill_lower = skill.lower()
+        categories = {
+            "Programming Languages": cls.PROGRAMMING_LANGUAGES,
+            "Web Technologies": cls.WEB_TECHNOLOGIES,
+            "Databases": cls.DATABASES,
+            "Cloud Platforms": cls.CLOUD_PLATFORMS,
+            "DevOps Tools": cls.DEVOPS_TOOLS,
+            "Data Science & ML": cls.DATA_SCIENCE_ML,
+            "Mobile Development": cls.MOBILE_DEVELOPMENT,
+            "Testing": cls.TESTING,
+            "Soft Skills": cls.SOFT_SKILLS,
+            "Security": cls.SECURITY,
+            "Design Tools": cls.DESIGN_TOOLS,
+            "Business Tools": cls.BUSINESS_TOOLS,
+            "Architecture": cls.ARCHITECTURE
         }
+        for category, skills in categories.items():
+            if skill_lower in skills:
+                return category
+        return None
 
 
-# =============================================================================
-# UTILITY HELPERS
-# =============================================================================
+# ============================================================================
+# TEXT PROCESSING UTILITIES
+# ============================================================================
 
-class TextUtils:
-    """Utility class for text processing operations."""
+class TextProcessor:
+    """
+    Handles all text extraction and preprocessing operations.
+    Implements NLP best practices for document analysis.
+    """
+    
+    def __init__(self):
+        """Initialize the text processor with required NLTK resources."""
+        self._ensure_nltk_resources()
+        self.lemmatizer = WordNetLemmatizer()
+        self.stop_words = set(stopwords.words('english'))
+        # Add custom stop words relevant to resumes
+        self.custom_stop_words = {
+            'resume', 'cv', 'curriculum', 'vitae', 'page', 'phone', 'email',
+            'address', 'linkedin', 'github', 'portfolio', 'objective',
+            'summary', 'experience', 'education', 'skills', 'references',
+            'available', 'upon', 'request', 'jan', 'feb', 'mar', 'apr',
+            'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec',
+            'january', 'february', 'march', 'april', 'june', 'july',
+            'august', 'september', 'october', 'november', 'december'
+        }
+        self.stop_words.update(self.custom_stop_words)
     
     @staticmethod
-    def clean_text(text: str) -> str:
+    def _ensure_nltk_resources():
+        """Download required NLTK resources if not present."""
+        resources = ['punkt', 'stopwords', 'wordnet', 'averaged_perceptron_tagger', 'punkt_tab']
+        for resource in resources:
+            try:
+                nltk.data.find(f'tokenizers/{resource}')
+            except LookupError:
+                try:
+                    nltk.download(resource, quiet=True)
+                except:
+                    pass
+            try:
+                nltk.data.find(f'corpora/{resource}')
+            except LookupError:
+                try:
+                    nltk.download(resource, quiet=True)
+                except:
+                    pass
+    
+    def extract_text_from_pdf(self, pdf_file) -> str:
         """
-        Clean and normalize text by removing extra whitespace,
-        special characters, and normalizing line breaks.
+        Extract text content from a PDF file.
+        
+        Args:
+            pdf_file: Uploaded PDF file object
+            
+        Returns:
+            Extracted text content as string
+        """
+        try:
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            text_content = []
+            
+            for page_num, page in enumerate(pdf_reader.pages):
+                try:
+                    page_text = page.extract_text()
+                    if page_text:
+                        text_content.append(page_text)
+                except Exception as e:
+                    logging.warning(f"Could not extract text from page {page_num}: {e}")
+                    continue
+            
+            return ' '.join(text_content)
+        except Exception as e:
+            logging.error(f"PDF extraction failed: {e}")
+            raise ValueError(f"Failed to extract text from PDF: {str(e)}")
+    
+    def clean_text(self, text: str) -> str:
+        """
+        Clean and normalize text for processing.
+        
+        Args:
+            text: Raw text input
+            
+        Returns:
+            Cleaned text string
         """
         if not text:
             return ""
         
-        # Replace multiple newlines with single newline
-        text = re.sub(r'\n+', '\n', text)
+        # Convert to lowercase
+        text = text.lower()
         
-        # Replace multiple spaces with single space
-        text = re.sub(r'\s+', ' ', text)
+        # Remove URLs
+        text = re.sub(r'http[s]?://\S+', '', text)
+        text = re.sub(r'www\.\S+', '', text)
         
-        # Remove special unicode characters
-        text = text.encode('ascii', 'ignore').decode('ascii')
+        # Remove email addresses
+        text = re.sub(r'\S+@\S+', '', text)
         
-        # Strip leading/trailing whitespace
-        text = text.strip()
+        # Remove phone numbers
+        text = re.sub(r'[\+]?[(]?[0-9]{1,3}[)]?[-\s\.]?[0-9]{1,4}[-\s\.]?[0-9]{1,4}[-\s\.]?[0-9]{1,9}', '', text)
+        
+        # Keep alphanumeric, spaces, and some special chars for skills like C++, C#
+        text = re.sub(r'[^\w\s\+\#\.]', ' ', text)
+        
+        # Remove extra whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
         
         return text
     
-    @staticmethod
-    def remove_urls(text: str) -> str:
-        """Remove URLs from text."""
-        url_pattern = r'https?://\S+|www\.\S+'
-        return re.sub(url_pattern, '', text)
-    
-    @staticmethod
-    def remove_emails(text: str) -> str:
-        """Remove email addresses from text."""
-        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
-        return re.sub(email_pattern, '', text)
-    
-    @staticmethod
-    def remove_phone_numbers(text: str) -> str:
-        """Remove phone numbers from text."""
-        phone_pattern = r'[\+]?[(]?[0-9]{1,3}[)]?[-\s\.]?[(]?[0-9]{1,3}[)]?[-\s\.]?[0-9]{3,6}[-\s\.]?[0-9]{3,6}'
-        return re.sub(phone_pattern, '', text)
-    
-    @staticmethod
-    def extract_years_of_experience(text: str) -> Optional[int]:
-        """Extract years of experience from text."""
-        patterns = [
-            r'(\d+)\+?\s*(?:years?|yrs?)(?:\s+of)?\s+(?:experience|exp)',
-            r'(?:experience|exp)(?:\s+of)?\s*:?\s*(\d+)\+?\s*(?:years?|yrs?)',
-            r'(\d+)\+?\s*(?:years?|yrs?)\s+(?:in|of|working)',
-        ]
-        
-        text_lower = text.lower()
-        for pattern in patterns:
-            match = re.search(pattern, text_lower)
-            if match:
-                try:
-                    return int(match.group(1))
-                except (ValueError, IndexError):
-                    continue
-        return None
-    
-    @staticmethod
-    def calculate_text_similarity(text1: str, text2: str) -> float:
-        """Calculate simple text overlap similarity."""
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        if not words1 or not words2:
-            return 0.0
-        
-        intersection = words1.intersection(words2)
-        union = words1.union(words2)
-        
-        return len(intersection) / len(union) if union else 0.0
-
-
-# =============================================================================
-# PDF PARSER MODULE
-# =============================================================================
-
-class PDFParser:
-    """
-    Professional PDF parsing module with multiple extraction methods
-    and robust error handling.
-    """
-    
-    def __init__(self):
-        self.extraction_methods = [
-            self._extract_with_pdfplumber,
-            self._extract_with_pypdf2
-        ]
-    
-    def extract_text(self, pdf_file) -> Tuple[str, Dict]:
+    def tokenize_and_lemmatize(self, text: str) -> List[str]:
         """
-        Extract text from PDF file using multiple methods.
-        Returns extracted text and metadata.
+        Tokenize text and apply lemmatization.
+        
+        Args:
+            text: Cleaned text input
+            
+        Returns:
+            List of lemmatized tokens
         """
-        text = ""
-        metadata = {
-            "pages": 0,
-            "extraction_method": None,
-            "success": False,
-            "errors": []
-        }
-        
-        for method in self.extraction_methods:
-            try:
-                # Reset file pointer
-                pdf_file.seek(0)
-                text, page_count = method(pdf_file)
-                
-                if text and len(text.strip()) > 50:
-                    metadata["pages"] = page_count
-                    metadata["extraction_method"] = method.__name__
-                    metadata["success"] = True
-                    break
-            except Exception as e:
-                metadata["errors"].append(f"{method.__name__}: {str(e)}")
-                continue
-        
-        if not metadata["success"]:
-            # Try one more time with basic extraction
-            try:
-                pdf_file.seek(0)
-                text, page_count = self._basic_extraction(pdf_file)
-                if text:
-                    metadata["pages"] = page_count
-                    metadata["extraction_method"] = "basic_extraction"
-                    metadata["success"] = True
-            except Exception as e:
-                metadata["errors"].append(f"basic_extraction: {str(e)}")
-        
-        return text, metadata
-    
-    def _extract_with_pdfplumber(self, pdf_file) -> Tuple[str, int]:
-        """Extract text using pdfplumber library."""
-        text_content = []
-        page_count = 0
-        
-        with pdfplumber.open(pdf_file) as pdf:
-            page_count = len(pdf.pages)
-            for page in pdf.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text_content.append(page_text)
-        
-        return '\n'.join(text_content), page_count
-    
-    def _extract_with_pypdf2(self, pdf_file) -> Tuple[str, int]:
-        """Extract text using PyPDF2 library."""
-        text_content = []
-        
-        reader = PdfReader(pdf_file)
-        page_count = len(reader.pages)
-        
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text_content.append(page_text)
-        
-        return '\n'.join(text_content), page_count
-    
-    def _basic_extraction(self, pdf_file) -> Tuple[str, int]:
-        """Fallback basic extraction method."""
-        try:
-            reader = PdfReader(pdf_file)
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text() or ""
-            return text, len(reader.pages)
-        except Exception:
-            return "", 0
-
-
-# =============================================================================
-# TEXT PREPROCESSOR MODULE
-# =============================================================================
-
-class TextPreprocessor:
-    """
-    Advanced NLP text preprocessing module with tokenization,
-    lemmatization, and stopword removal.
-    """
-    
-    def __init__(self):
-        try:
-            self.stop_words = set(stopwords.words('english'))
-        except LookupError:
-            nltk.download('stopwords', quiet=True)
-            self.stop_words = set(stopwords.words('english'))
-        
-        self.lemmatizer = WordNetLemmatizer()
-        
-        # Custom stop words to preserve
-        self.preserve_words = {
-            'python', 'java', 'r', 'c', 'go', 'sql', 'no', 'not',
-            'aws', 'gcp', 'azure', 'ml', 'ai', 'ui', 'ux', 'qa',
-            'api', 'apis', 'ci', 'cd', 'it', 'bi', 'pm'
-        }
-        
-        # Update stop words
-        self.stop_words -= self.preserve_words
-    
-    def preprocess(self, text: str, 
-                   remove_stopwords: bool = True,
-                   lemmatize: bool = True,
-                   lowercase: bool = True) -> str:
-        """
-        Preprocess text with various NLP techniques.
-        """
-        if not text:
-            return ""
-        
-        # Clean text
-        text = TextUtils.clean_text(text)
-        text = TextUtils.remove_urls(text)
-        text = TextUtils.remove_emails(text)
-        text = TextUtils.remove_phone_numbers(text)
-        
-        # Convert to lowercase
-        if lowercase:
-            text = text.lower()
-        
-        # Tokenize
         try:
             tokens = word_tokenize(text)
-        except LookupError:
-            nltk.download('punkt', quiet=True)
-            tokens = word_tokenize(text)
+        except:
+            tokens = text.split()
         
-        # Process tokens
-        processed_tokens = []
+        lemmatized_tokens = []
         for token in tokens:
-            # Skip punctuation and single characters (except preserved)
-            if token in string.punctuation:
-                continue
-            if len(token) == 1 and token.lower() not in self.preserve_words:
-                continue
-            
-            # Skip numbers only
-            if token.isdigit():
-                continue
-            
-            # Remove stopwords
-            if remove_stopwords and token.lower() in self.stop_words:
-                continue
-            
-            # Lemmatize
-            if lemmatize:
-                token = self.lemmatizer.lemmatize(token)
-            
-            processed_tokens.append(token)
+            if token not in self.stop_words and len(token) > 1:
+                if not token.isdigit():
+                    lemmatized_token = self.lemmatizer.lemmatize(token)
+                    lemmatized_tokens.append(lemmatized_token)
         
-        return ' '.join(processed_tokens)
+        return lemmatized_tokens
     
-    def tokenize_for_skills(self, text: str) -> List[str]:
+    def preprocess_for_analysis(self, text: str) -> str:
         """
-        Tokenize text for skill extraction, preserving multi-word skills.
+        Full preprocessing pipeline for text analysis.
+        
+        Args:
+            text: Raw text input
+            
+        Returns:
+            Preprocessed text ready for analysis
         """
-        if not text:
-            return []
-        
-        text = text.lower()
-        
-        # Extract potential multi-word phrases (bigrams and trigrams)
-        words = text.split()
-        tokens = []
-        
-        # Add unigrams
-        tokens.extend(words)
-        
-        # Add bigrams
-        for i in range(len(words) - 1):
-            bigram = f"{words[i]} {words[i+1]}"
-            tokens.append(bigram)
-        
-        # Add trigrams
-        for i in range(len(words) - 2):
-            trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
-            tokens.append(trigram)
-        
-        return tokens
+        cleaned = self.clean_text(text)
+        tokens = self.tokenize_and_lemmatize(cleaned)
+        return ' '.join(tokens)
     
-    def get_sentences(self, text: str) -> List[str]:
-        """Extract sentences from text."""
-        if not text:
-            return []
+    def extract_keywords(self, text: str, top_n: int = 50) -> List[Tuple[str, int]]:
+        """
+        Extract most frequent keywords from text.
         
-        try:
-            sentences = sent_tokenize(text)
-        except LookupError:
-            nltk.download('punkt', quiet=True)
-            sentences = sent_tokenize(text)
-        
-        return sentences
+        Args:
+            text: Preprocessed text
+            top_n: Number of top keywords to return
+            
+        Returns:
+            List of (keyword, frequency) tuples
+        """
+        cleaned = self.clean_text(text)
+        tokens = self.tokenize_and_lemmatize(cleaned)
+        word_freq = Counter(tokens)
+        return word_freq.most_common(top_n)
 
 
-# =============================================================================
+# ============================================================================
 # SKILL EXTRACTION ENGINE
-# =============================================================================
+# ============================================================================
 
-@dataclass
-class SkillMatch:
-    """Data class representing a matched skill."""
-    skill: str
-    category: str
-    frequency: int = 1
-    context: str = ""
-
-
-@dataclass
-class SkillExtractionResult:
-    """Data class for skill extraction results."""
-    found_skills: List[SkillMatch] = field(default_factory=list)
-    skill_categories: Dict[str, List[str]] = field(default_factory=dict)
-    total_skills: int = 0
-    
-    def get_skills_list(self) -> List[str]:
-        """Get flat list of skill names."""
-        return [match.skill for match in self.found_skills]
-
-
-class SkillEngine:
+class SkillExtractor:
     """
-    Advanced skill extraction engine using pattern matching
-    and fuzzy matching techniques.
+    Extracts and matches skills from text using the skills database.
+    Implements fuzzy matching and context-aware skill detection.
     """
     
     def __init__(self):
-        self.skills_db = SkillsDatabase()
-        self.all_skills = self.skills_db.get_all_skills()
-        self.skill_categories = self.skills_db.get_skill_categories()
-        self.preprocessor = TextPreprocessor()
-        
-        # Build skill variations for better matching
-        self.skill_variations = self._build_skill_variations()
+        """Initialize the skill extractor with the skills database."""
+        self.all_skills = SkillsDatabase.get_all_skills()
+        self.skill_patterns = self._build_skill_patterns()
     
-    def _build_skill_variations(self) -> Dict[str, str]:
-        """Build a dictionary of skill variations to canonical forms."""
-        variations = {}
-        
+    def _build_skill_patterns(self) -> Dict[str, re.Pattern]:
+        """Build regex patterns for skill matching."""
+        patterns = {}
         for skill in self.all_skills:
-            # Original form
-            variations[skill.lower()] = skill
-            
-            # Without dots
-            variations[skill.lower().replace('.', '')] = skill
-            
-            # Without hyphens
-            variations[skill.lower().replace('-', ' ')] = skill
-            variations[skill.lower().replace('-', '')] = skill
-            
-            # Without spaces
-            variations[skill.lower().replace(' ', '')] = skill
-            
-            # Common abbreviation handling
-            if '.' in skill:
-                variations[skill.lower().replace('.js', 'js')] = skill
-        
-        return variations
+            # Create pattern that matches the skill as a whole word
+            escaped_skill = re.escape(skill)
+            pattern = re.compile(r'\b' + escaped_skill + r'\b', re.IGNORECASE)
+            patterns[skill] = pattern
+        return patterns
     
-    def extract_skills(self, text: str) -> SkillExtractionResult:
+    def extract_skills(self, text: str) -> Set[str]:
         """
-        Extract skills from text using pattern matching.
-        """
-        result = SkillExtractionResult()
+        Extract all matching skills from text.
         
+        Args:
+            text: Text to analyze
+            
+        Returns:
+            Set of found skills
+        """
         if not text:
-            return result
+            return set()
         
-        # Normalize text for matching
+        found_skills = set()
         text_lower = text.lower()
         
-        # Track found skills to avoid duplicates
-        found_skills_set = set()
-        skill_counts = Counter()
+        # Direct matching
+        for skill, pattern in self.skill_patterns.items():
+            if pattern.search(text_lower):
+                found_skills.add(skill)
         
-        # Get all tokens including n-grams
-        tokens = self.preprocessor.tokenize_for_skills(text_lower)
+        # Additional pattern matching for compound skills
+        found_skills.update(self._extract_compound_skills(text_lower))
         
-        # Match against skill database
-        for token in tokens:
-            token_clean = token.strip()
-            
-            # Check direct match
-            if token_clean in self.skill_variations:
-                canonical_skill = self.skill_variations[token_clean]
-                if canonical_skill.lower() not in found_skills_set:
-                    found_skills_set.add(canonical_skill.lower())
-                    skill_counts[canonical_skill.lower()] += 1
-            
-            # Check cleaned variations
-            token_no_punct = re.sub(r'[^\w\s]', '', token_clean)
-            if token_no_punct in self.skill_variations:
-                canonical_skill = self.skill_variations[token_no_punct]
-                if canonical_skill.lower() not in found_skills_set:
-                    found_skills_set.add(canonical_skill.lower())
-                    skill_counts[canonical_skill.lower()] += 1
-        
-        # Also check for skills as substrings for multi-word skills
-        for skill in self.all_skills:
-            skill_lower = skill.lower()
-            if len(skill_lower) > 3:  # Only for longer skills to avoid false positives
-                if skill_lower in text_lower and skill_lower not in found_skills_set:
-                    found_skills_set.add(skill_lower)
-                    skill_counts[skill_lower] += 1
-        
-        # Build result
-        for skill_lower in found_skills_set:
-            category = self._get_skill_category(skill_lower)
-            skill_match = SkillMatch(
-                skill=skill_lower,
-                category=category,
-                frequency=skill_counts.get(skill_lower, 1)
-            )
-            result.found_skills.append(skill_match)
-            
-            # Add to category mapping
-            if category not in result.skill_categories:
-                result.skill_categories[category] = []
-            result.skill_categories[category].append(skill_lower)
-        
-        result.total_skills = len(result.found_skills)
-        
-        return result
+        return found_skills
     
-    def _get_skill_category(self, skill: str) -> str:
-        """Get the category of a skill."""
-        skill_lower = skill.lower()
+    def _extract_compound_skills(self, text: str) -> Set[str]:
+        """Extract skills that might appear in different formats."""
+        found = set()
         
-        for category, skills in self.skill_categories.items():
-            if skill_lower in skills:
-                return category
-        
-        return "Other Skills"
-    
-    def compare_skills(self, resume_skills: List[str], 
-                       jd_skills: List[str]) -> Dict[str, List[str]]:
-        """
-        Compare resume skills against job description skills.
-        """
-        resume_set = set(s.lower() for s in resume_skills)
-        jd_set = set(s.lower() for s in jd_skills)
-        
-        matched = resume_set.intersection(jd_set)
-        missing = jd_set - resume_set
-        additional = resume_set - jd_set
-        
-        return {
-            "matched": sorted(list(matched)),
-            "missing": sorted(list(missing)),
-            "additional": sorted(list(additional))
+        # Common variations
+        variations = {
+            'react.js': 'reactjs',
+            'react js': 'reactjs',
+            'vue.js': 'vuejs',
+            'vue js': 'vuejs',
+            'node.js': 'nodejs',
+            'node js': 'nodejs',
+            'next.js': 'nextjs',
+            'next js': 'nextjs',
+            'express.js': 'expressjs',
+            'machine-learning': 'machine learning',
+            'deep-learning': 'deep learning',
+            'ci/cd': 'ci/cd',
+            'ci cd': 'ci/cd',
+            '.net core': '.net core',
+            'dot net': '.net',
         }
+        
+        for variant, canonical in variations.items():
+            if variant in text:
+                found.add(canonical)
+        
+        return found
+    
+    def categorize_skills(self, skills: Set[str]) -> Dict[str, List[str]]:
+        """
+        Categorize skills by their domain.
+        
+        Args:
+            skills: Set of skills to categorize
+            
+        Returns:
+            Dictionary mapping categories to skill lists
+        """
+        categorized = {}
+        for skill in skills:
+            category = SkillsDatabase.get_skill_category(skill)
+            if category:
+                if category not in categorized:
+                    categorized[category] = []
+                categorized[category].append(skill)
+        
+        # Sort skills within each category
+        for category in categorized:
+            categorized[category].sort()
+        
+        return categorized
 
 
-# =============================================================================
-# ATS SCORING ENGINE
-# =============================================================================
+# ============================================================================
+# ATS MATCHING ENGINE
+# ============================================================================
 
 @dataclass
-class ATSScore:
-    """Data class for ATS scoring results."""
-    overall_score: float = 0.0
-    skill_match_score: float = 0.0
-    content_similarity_score: float = 0.0
-    keyword_density_score: float = 0.0
-    experience_match_score: float = 0.0
-    formatting_score: float = 0.0
-    
-    def get_letter_grade(self) -> str:
-        """Get letter grade based on overall score."""
-        if self.overall_score >= 90:
-            return "A+"
-        elif self.overall_score >= 85:
-            return "A"
-        elif self.overall_score >= 80:
-            return "A-"
-        elif self.overall_score >= 75:
-            return "B+"
-        elif self.overall_score >= 70:
-            return "B"
-        elif self.overall_score >= 65:
-            return "B-"
-        elif self.overall_score >= 60:
-            return "C+"
-        elif self.overall_score >= 55:
-            return "C"
-        elif self.overall_score >= 50:
-            return "C-"
-        elif self.overall_score >= 45:
-            return "D"
-        else:
-            return "F"
-    
-    def get_score_interpretation(self) -> str:
-        """Get interpretation of the score."""
-        if self.overall_score >= 80:
-            return "Excellent Match"
-        elif self.overall_score >= 65:
-            return "Good Match"
-        elif self.overall_score >= 50:
-            return "Fair Match"
-        elif self.overall_score >= 35:
-            return "Needs Improvement"
-        else:
-            return "Poor Match"
+class AnalysisResult:
+    """Data class to hold analysis results."""
+    overall_score: float
+    skill_match_score: float
+    content_similarity_score: float
+    keyword_match_score: float
+    matched_skills: Set[str]
+    missing_skills: Set[str]
+    resume_only_skills: Set[str]
+    matched_keywords: List[str]
+    strengths: List[str]
+    weaknesses: List[str]
+    recommendations: List[str]
+    skill_categories: Dict[str, List[str]]
+    missing_categories: Dict[str, List[str]]
 
 
 class ATSEngine:
     """
-    Advanced ATS scoring engine using TF-IDF vectorization
-    and cosine similarity for content matching.
+    Core ATS matching engine using TF-IDF and cosine similarity.
+    Implements industry-standard resume scoring algorithms.
     """
     
     def __init__(self):
-        self.preprocessor = TextPreprocessor()
-        self.skill_engine = SkillEngine()
-        
-        # TF-IDF Vectorizer with optimized parameters
+        """Initialize the ATS engine with required components."""
+        self.text_processor = TextProcessor()
+        self.skill_extractor = SkillExtractor()
         self.vectorizer = TfidfVectorizer(
-            max_features=5000,
-            ngram_range=(1, 3),
+            max_features=Config.TFIDF_MAX_FEATURES,
+            ngram_range=Config.TFIDF_NGRAM_RANGE,
             stop_words='english',
-            min_df=1,
-            max_df=0.95,
-            sublinear_tf=True
+            lowercase=True,
+            norm='l2'
         )
     
-    def calculate_ats_score(self, 
-                            resume_text: str, 
-                            jd_text: str) -> Tuple[ATSScore, Dict]:
+    def analyze(self, resume_text: str, job_description: str) -> AnalysisResult:
         """
-        Calculate comprehensive ATS score comparing resume to job description.
+        Perform comprehensive resume analysis against job description.
+        
+        Args:
+            resume_text: Extracted resume text
+            job_description: Job description text
+            
+        Returns:
+            AnalysisResult object with all scores and insights
         """
-        score = ATSScore()
-        analysis = {}
+        # Extract skills from both documents
+        resume_skills = self.skill_extractor.extract_skills(resume_text)
+        jd_skills = self.skill_extractor.extract_skills(job_description)
         
-        if not resume_text or not jd_text:
-            return score, analysis
-        
-        # 1. Preprocess texts
-        resume_processed = self.preprocessor.preprocess(resume_text)
-        jd_processed = self.preprocessor.preprocess(jd_text)
-        
-        # 2. Calculate content similarity using TF-IDF
-        try:
-            tfidf_matrix = self.vectorizer.fit_transform([resume_processed, jd_processed])
-            cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
-            score.content_similarity_score = min(cosine_sim * 100, 100)
-        except Exception:
-            score.content_similarity_score = 0
-        
-        # 3. Extract and compare skills
-        resume_skills_result = self.skill_engine.extract_skills(resume_text)
-        jd_skills_result = self.skill_engine.extract_skills(jd_text)
-        
-        resume_skills = resume_skills_result.get_skills_list()
-        jd_skills = jd_skills_result.get_skills_list()
-        
-        skill_comparison = self.skill_engine.compare_skills(resume_skills, jd_skills)
+        # Calculate skill matches
+        matched_skills = resume_skills.intersection(jd_skills)
+        missing_skills = jd_skills - resume_skills
+        resume_only_skills = resume_skills - jd_skills
         
         # Calculate skill match score
-        if jd_skills:
-            skill_match_ratio = len(skill_comparison["matched"]) / len(jd_skills)
-            score.skill_match_score = min(skill_match_ratio * 100, 100)
-        else:
-            score.skill_match_score = 50  # Neutral if no skills in JD
+        skill_match_score = self._calculate_skill_match_score(matched_skills, jd_skills)
         
-        # 4. Calculate keyword density score
-        jd_keywords = set(jd_processed.split())
-        resume_keywords = set(resume_processed.split())
+        # Calculate content similarity using TF-IDF
+        content_similarity_score = self._calculate_content_similarity(resume_text, job_description)
         
-        if jd_keywords:
-            keyword_overlap = len(jd_keywords.intersection(resume_keywords)) / len(jd_keywords)
-            score.keyword_density_score = min(keyword_overlap * 100, 100)
+        # Calculate keyword match score
+        keyword_match_score, matched_keywords = self._calculate_keyword_match(resume_text, job_description)
         
-        # 5. Experience match analysis
-        resume_years = TextUtils.extract_years_of_experience(resume_text)
-        jd_years = TextUtils.extract_years_of_experience(jd_text)
-        
-        if resume_years and jd_years:
-            if resume_years >= jd_years:
-                score.experience_match_score = 100
-            else:
-                ratio = resume_years / jd_years
-                score.experience_match_score = min(ratio * 100, 100)
-        else:
-            score.experience_match_score = 70  # Neutral if can't determine
-        
-        # 6. Formatting/Structure score (basic checks)
-        score.formatting_score = self._calculate_formatting_score(resume_text)
-        
-        # 7. Calculate overall weighted score
-        score.overall_score = self._calculate_weighted_score(score)
-        
-        # Build analysis dictionary
-        analysis = {
-            "resume_skills": resume_skills,
-            "jd_skills": jd_skills,
-            "matched_skills": skill_comparison["matched"],
-            "missing_skills": skill_comparison["missing"],
-            "additional_skills": skill_comparison["additional"],
-            "resume_skill_categories": resume_skills_result.skill_categories,
-            "jd_skill_categories": jd_skills_result.skill_categories,
-            "resume_word_count": len(resume_text.split()),
-            "jd_word_count": len(jd_text.split()),
-            "resume_years_experience": resume_years,
-            "jd_years_required": jd_years
-        }
-        
-        return score, analysis
-    
-    def _calculate_formatting_score(self, text: str) -> float:
-        """Calculate basic formatting/structure score."""
-        score = 50  # Base score
-        
-        # Check for section headers
-        common_sections = [
-            'experience', 'education', 'skills', 'summary', 
-            'objective', 'work history', 'employment', 'projects',
-            'certifications', 'achievements', 'accomplishments'
-        ]
-        
-        text_lower = text.lower()
-        sections_found = sum(1 for section in common_sections if section in text_lower)
-        score += min(sections_found * 5, 25)  # Up to 25 points for sections
-        
-        # Check for bullet points or structured content
-        if '•' in text or '●' in text or '-' in text or '*' in text:
-            score += 10
-        
-        # Check for proper length (not too short, not too long)
-        word_count = len(text.split())
-        if 200 <= word_count <= 1000:
-            score += 15
-        elif 100 <= word_count < 200 or 1000 < word_count <= 1500:
-            score += 10
-        
-        return min(score, 100)
-    
-    def _calculate_weighted_score(self, score: ATSScore) -> float:
-        """Calculate weighted overall score."""
-        weights = {
-            'skill_match': 0.35,
-            'content_similarity': 0.30,
-            'keyword_density': 0.20,
-            'experience_match': 0.10,
-            'formatting': 0.05
-        }
-        
-        weighted_score = (
-            score.skill_match_score * weights['skill_match'] +
-            score.content_similarity_score * weights['content_similarity'] +
-            score.keyword_density_score * weights['keyword_density'] +
-            score.experience_match_score * weights['experience_match'] +
-            score.formatting_score * weights['formatting']
+        # Calculate overall score with weighted components
+        overall_score = (
+            skill_match_score * Config.SKILL_MATCH_WEIGHT +
+            content_similarity_score * Config.CONTENT_SIMILARITY_WEIGHT +
+            keyword_match_score * Config.KEYWORD_DENSITY_WEIGHT
         )
         
-        return round(weighted_score, 1)
-
-
-# =============================================================================
-# ANALYSIS ORCHESTRATOR
-# =============================================================================
-
-@dataclass
-class AnalysisResult:
-    """Complete analysis result data class."""
-    ats_score: ATSScore
-    analysis: Dict
-    strengths: List[str]
-    weaknesses: List[str]
-    recommendations: List[str]
-    resume_metadata: Dict
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
-
-
-class ResumeAnalyzer:
-    """
-    Main orchestrator class that coordinates all analysis components.
-    """
-    
-    def __init__(self):
-        self.pdf_parser = PDFParser()
-        self.ats_engine = ATSEngine()
-        self.preprocessor = TextPreprocessor()
-    
-    def analyze(self, resume_file, job_description: str) -> AnalysisResult:
-        """
-        Perform complete resume analysis against job description.
-        """
-        # Extract resume text
-        resume_text, resume_metadata = self.pdf_parser.extract_text(resume_file)
+        # Generate insights
+        strengths = self._generate_strengths(matched_skills, content_similarity_score, resume_skills)
+        weaknesses = self._generate_weaknesses(missing_skills, overall_score)
+        recommendations = self._generate_recommendations(missing_skills, overall_score, matched_skills)
         
-        if not resume_text:
-            raise ValueError("Could not extract text from resume PDF. Please ensure the PDF contains selectable text.")
-        
-        if not job_description.strip():
-            raise ValueError("Job description cannot be empty.")
-        
-        # Calculate ATS score and get analysis
-        ats_score, analysis = self.ats_engine.calculate_ats_score(resume_text, job_description)
-        
-        # Generate strengths, weaknesses, and recommendations
-        strengths = self._identify_strengths(ats_score, analysis)
-        weaknesses = self._identify_weaknesses(ats_score, analysis)
-        recommendations = self._generate_recommendations(ats_score, analysis)
+        # Categorize skills
+        skill_categories = self.skill_extractor.categorize_skills(matched_skills)
+        missing_categories = self.skill_extractor.categorize_skills(missing_skills)
         
         return AnalysisResult(
-            ats_score=ats_score,
-            analysis=analysis,
+            overall_score=round(overall_score, 1),
+            skill_match_score=round(skill_match_score, 1),
+            content_similarity_score=round(content_similarity_score, 1),
+            keyword_match_score=round(keyword_match_score, 1),
+            matched_skills=matched_skills,
+            missing_skills=missing_skills,
+            resume_only_skills=resume_only_skills,
+            matched_keywords=matched_keywords,
             strengths=strengths,
             weaknesses=weaknesses,
             recommendations=recommendations,
-            resume_metadata=resume_metadata
+            skill_categories=skill_categories,
+            missing_categories=missing_categories
         )
     
-    def _identify_strengths(self, score: ATSScore, analysis: Dict) -> List[str]:
-        """Identify resume strengths based on analysis."""
+    def _calculate_skill_match_score(self, matched: Set[str], required: Set[str]) -> float:
+        """Calculate the skill match percentage score."""
+        if not required:
+            return 100.0
+        return (len(matched) / len(required)) * 100
+    
+    def _calculate_content_similarity(self, resume: str, job_desc: str) -> float:
+        """Calculate TF-IDF based cosine similarity score."""
+        try:
+            # Preprocess texts
+            resume_processed = self.text_processor.preprocess_for_analysis(resume)
+            jd_processed = self.text_processor.preprocess_for_analysis(job_desc)
+            
+            if not resume_processed or not jd_processed:
+                return 0.0
+            
+            # Create TF-IDF vectors
+            tfidf_matrix = self.vectorizer.fit_transform([resume_processed, jd_processed])
+            
+            # Calculate cosine similarity
+            similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+            
+            # Convert to percentage (0-100)
+            return similarity * 100
+        except Exception as e:
+            logging.error(f"Content similarity calculation failed: {e}")
+            return 0.0
+    
+    def _calculate_keyword_match(self, resume: str, job_desc: str) -> Tuple[float, List[str]]:
+        """Calculate keyword matching score and return matched keywords."""
+        jd_keywords = self.text_processor.extract_keywords(job_desc, top_n=30)
+        resume_lower = resume.lower()
+        
+        matched_keywords = []
+        for keyword, _ in jd_keywords:
+            if keyword in resume_lower:
+                matched_keywords.append(keyword)
+        
+        if not jd_keywords:
+            return 100.0, []
+        
+        score = (len(matched_keywords) / len(jd_keywords)) * 100
+        return score, matched_keywords[:15]  # Return top 15 matched keywords
+    
+    def _generate_strengths(self, matched_skills: Set[str], 
+                           similarity_score: float, 
+                           all_resume_skills: Set[str]) -> List[str]:
+        """Generate list of strengths based on analysis."""
         strengths = []
         
-        # Skill-based strengths
-        matched_count = len(analysis.get("matched_skills", []))
-        if matched_count >= 10:
-            strengths.append(f"Excellent skill alignment with {matched_count} matching skills identified")
-        elif matched_count >= 5:
-            strengths.append(f"Good skill coverage with {matched_count} relevant skills found")
+        if len(matched_skills) >= 10:
+            strengths.append(f"Strong skill alignment with {len(matched_skills)} matching skills")
+        elif len(matched_skills) >= 5:
+            strengths.append(f"Good skill coverage with {len(matched_skills)} matching skills")
         
-        # Score-based strengths
-        if score.content_similarity_score >= 70:
-            strengths.append("Strong content alignment with job requirements")
+        if similarity_score >= 70:
+            strengths.append("Excellent content relevance to job description")
+        elif similarity_score >= 50:
+            strengths.append("Good content alignment with job requirements")
         
-        if score.skill_match_score >= 75:
-            strengths.append("High percentage of required skills present in resume")
+        if len(all_resume_skills) >= 20:
+            strengths.append(f"Diverse skill portfolio with {len(all_resume_skills)} total skills")
         
-        if score.experience_match_score >= 80:
-            strengths.append("Experience level aligns well with position requirements")
+        # Check for high-demand skills
+        high_demand = {'python', 'javascript', 'aws', 'docker', 'kubernetes', 'machine learning'}
+        found_high_demand = matched_skills.intersection(high_demand)
+        if found_high_demand:
+            strengths.append(f"Possesses high-demand skills: {', '.join(list(found_high_demand)[:3])}")
         
-        if score.formatting_score >= 80:
-            strengths.append("Well-structured resume format with clear sections")
-        
-        # Additional skill strengths
-        additional_skills = analysis.get("additional_skills", [])
-        if len(additional_skills) >= 5:
-            strengths.append(f"Demonstrates {len(additional_skills)} additional valuable skills beyond requirements")
-        
-        # Category-based strengths
-        resume_categories = analysis.get("resume_skill_categories", {})
-        if len(resume_categories) >= 5:
-            strengths.append(f"Diverse skill set spanning {len(resume_categories)} different categories")
-        
-        # Default if no strengths identified
         if not strengths:
-            strengths.append("Resume submitted for analysis")
+            strengths.append("Resume contains relevant professional content")
         
         return strengths
     
-    def _identify_weaknesses(self, score: ATSScore, analysis: Dict) -> List[str]:
-        """Identify resume weaknesses based on analysis."""
+    def _generate_weaknesses(self, missing_skills: Set[str], overall_score: float) -> List[str]:
+        """Generate list of weaknesses based on analysis."""
         weaknesses = []
         
-        # Missing skills
-        missing_skills = analysis.get("missing_skills", [])
-        if len(missing_skills) >= 5:
-            top_missing = missing_skills[:5]
-            weaknesses.append(f"Missing {len(missing_skills)} required skills including: {', '.join(top_missing)}")
-        elif missing_skills:
-            weaknesses.append(f"Missing some key skills: {', '.join(missing_skills)}")
+        if len(missing_skills) > 10:
+            weaknesses.append(f"Missing {len(missing_skills)} skills mentioned in job description")
+        elif len(missing_skills) > 5:
+            weaknesses.append(f"Could improve coverage on {len(missing_skills)} required skills")
         
-        # Score-based weaknesses
-        if score.content_similarity_score < 50:
-            weaknesses.append("Limited alignment between resume content and job description")
+        if overall_score < Config.FAIR_SCORE:
+            weaknesses.append("Overall alignment with job requirements needs improvement")
         
-        if score.skill_match_score < 50:
-            weaknesses.append("Low percentage of required skills found in resume")
+        # Identify critical missing skills
+        critical_skills = {'python', 'java', 'javascript', 'sql', 'aws', 'docker'}
+        missing_critical = missing_skills.intersection(critical_skills)
+        if missing_critical:
+            weaknesses.append(f"Missing commonly required skills: {', '.join(list(missing_critical)[:3])}")
         
-        if score.keyword_density_score < 40:
-            weaknesses.append("Resume lacks many key terms from the job description")
-        
-        if score.formatting_score < 60:
-            weaknesses.append("Resume structure could be improved with clearer sections")
-        
-        # Experience gap
-        resume_years = analysis.get("resume_years_experience")
-        jd_years = analysis.get("jd_years_required")
-        if resume_years and jd_years and resume_years < jd_years:
-            gap = jd_years - resume_years
-            weaknesses.append(f"Potential experience gap of {gap} year(s) compared to requirements")
-        
-        # Word count issues
-        word_count = analysis.get("resume_word_count", 0)
-        if word_count < 150:
-            weaknesses.append("Resume appears too brief - consider adding more detail")
-        elif word_count > 1500:
-            weaknesses.append("Resume may be too lengthy - consider condensing content")
+        if not weaknesses:
+            if missing_skills:
+                weaknesses.append("Minor gaps in skill coverage")
+            else:
+                weaknesses.append("No significant weaknesses identified")
         
         return weaknesses
     
-    def _generate_recommendations(self, score: ATSScore, analysis: Dict) -> List[str]:
-        """Generate actionable recommendations based on analysis."""
+    def _generate_recommendations(self, missing_skills: Set[str], 
+                                  overall_score: float,
+                                  matched_skills: Set[str]) -> List[str]:
+        """Generate actionable recommendations."""
         recommendations = []
         
-        # Skill recommendations
-        missing_skills = analysis.get("missing_skills", [])
         if missing_skills:
-            top_missing = missing_skills[:3]
-            recommendations.append(
-                f"Add missing high-priority skills: {', '.join(top_missing)}. "
-                "If you have experience with these, ensure they're explicitly mentioned."
-            )
+            # Prioritize missing skills by importance
+            priority_missing = []
+            for skill in missing_skills:
+                category = SkillsDatabase.get_skill_category(skill)
+                if category in ['Programming Languages', 'Cloud Platforms', 'Data Science & ML']:
+                    priority_missing.append(skill)
+            
+            if priority_missing:
+                top_skills = list(priority_missing)[:5]
+                recommendations.append(f"Consider adding these key skills: {', '.join(top_skills)}")
         
-        # Content recommendations
-        if score.content_similarity_score < 60:
-            recommendations.append(
-                "Tailor your resume language to match the job description. "
-                "Use similar terminology and phrases where applicable."
-            )
+        if overall_score < Config.GOOD_SCORE:
+            recommendations.append("Tailor resume content more closely to the job description")
+            recommendations.append("Use keywords from the job posting in your experience section")
         
-        # Keyword recommendations
-        if score.keyword_density_score < 50:
-            recommendations.append(
-                "Incorporate more keywords from the job posting. "
-                "Focus on technical terms, tools, and methodologies mentioned."
-            )
+        if len(matched_skills) < 5:
+            recommendations.append("Expand skills section with more relevant technical skills")
         
-        # Structure recommendations
-        if score.formatting_score < 70:
-            recommendations.append(
-                "Improve resume structure by adding clear section headers "
-                "(Experience, Skills, Education, Projects) and use bullet points."
-            )
+        recommendations.append("Quantify achievements with metrics where possible")
+        recommendations.append("Ensure consistent formatting and clear section headers")
         
-        # Quantification recommendation
-        recommendations.append(
-            "Quantify achievements where possible (e.g., 'Increased efficiency by 25%', "
-            "'Managed team of 5 engineers', 'Reduced costs by $50K')."
-        )
-        
-        # ATS optimization
-        if score.overall_score < 70:
-            recommendations.append(
-                "Consider using an ATS-friendly format: avoid tables, graphics, "
-                "and unusual fonts. Stick to standard section headings."
-            )
-        
-        # General best practices
-        recommendations.append(
-            "Keep your resume updated with recent projects and achievements. "
-            "Ensure contact information is current and professional."
-        )
-        
-        return recommendations
+        return recommendations[:6]  # Return top 6 recommendations
 
 
-# =============================================================================
+# ============================================================================
 # PDF REPORT GENERATOR
-# =============================================================================
+# ============================================================================
 
 class ReportGenerator:
     """
-    Professional PDF report generator using ReportLab.
-    Creates polished, ATS-style analysis reports.
+    Generates professional PDF reports for analysis results.
+    Uses ReportLab for high-quality document generation.
     """
     
     def __init__(self):
+        """Initialize the report generator with styles."""
         self.styles = getSampleStyleSheet()
         self._setup_custom_styles()
     
     def _setup_custom_styles(self):
-        """Set up custom paragraph styles for the report."""
+        """Setup custom paragraph styles for the report."""
         # Title style
         self.styles.add(ParagraphStyle(
-            name='CustomTitle',
-            parent=self.styles['Heading1'],
+            name='ReportTitle',
+            parent=self.styles['Title'],
             fontSize=24,
             spaceAfter=30,
-            alignment=TA_CENTER,
-            textColor=colors.HexColor('#1a1a2e')
-        ))
-        
-        # Subtitle style
-        self.styles.add(ParagraphStyle(
-            name='CustomSubtitle',
-            parent=self.styles['Normal'],
-            fontSize=12,
-            spaceAfter=20,
-            alignment=TA_CENTER,
-            textColor=colors.HexColor('#4a4a6a')
+            textColor=colors.HexColor('#1a1a2e'),
+            alignment=TA_CENTER
         ))
         
         # Section header style
         self.styles.add(ParagraphStyle(
             name='SectionHeader',
-            parent=self.styles['Heading2'],
+            parent=self.styles['Heading1'],
             fontSize=14,
             spaceBefore=20,
             spaceAfter=10,
             textColor=colors.HexColor('#16213e'),
-            borderPadding=(5, 5, 5, 5)
+            borderPadding=5
+        ))
+        
+        # Subsection header style
+        self.styles.add(ParagraphStyle(
+            name='SubsectionHeader',
+            parent=self.styles['Heading2'],
+            fontSize=12,
+            spaceBefore=15,
+            spaceAfter=8,
+            textColor=colors.HexColor('#0f3460')
         ))
         
         # Body text style
@@ -1277,9 +829,9 @@ class ReportGenerator:
             name='BodyText',
             parent=self.styles['Normal'],
             fontSize=10,
-            spaceAfter=8,
-            alignment=TA_JUSTIFY,
-            leading=14
+            spaceBefore=4,
+            spaceAfter=4,
+            alignment=TA_JUSTIFY
         ))
         
         # Bullet point style
@@ -1288,31 +840,35 @@ class ReportGenerator:
             parent=self.styles['Normal'],
             fontSize=10,
             leftIndent=20,
-            spaceAfter=6,
-            bulletIndent=10,
-            leading=13
+            spaceBefore=2,
+            spaceAfter=2
         ))
         
-        # Score display style
+        # Score style
         self.styles.add(ParagraphStyle(
-            name='ScoreDisplay',
+            name='ScoreText',
             parent=self.styles['Normal'],
-            fontSize=48,
+            fontSize=36,
             alignment=TA_CENTER,
-            textColor=colors.HexColor('#0f3460'),
+            textColor=colors.HexColor('#1a1a2e'),
             spaceAfter=10
         ))
     
-    def generate_report(self, result: AnalysisResult, 
-                        job_title: str = "Position") -> bytes:
+    def generate_report(self, result: AnalysisResult, resume_name: str = "Resume") -> bytes:
         """
-        Generate a comprehensive PDF report from analysis results.
-        Returns PDF as bytes.
+        Generate a comprehensive PDF report.
+        
+        Args:
+            result: AnalysisResult object with analysis data
+            resume_name: Name of the analyzed resume file
+            
+        Returns:
+            PDF file content as bytes
         """
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(
             buffer,
-            pagesize=letter,
+            pagesize=A4,
             rightMargin=50,
             leftMargin=50,
             topMargin=50,
@@ -1321,168 +877,177 @@ class ReportGenerator:
         
         story = []
         
-        # Title Section
-        story.append(Paragraph("Resume Analysis Report", self.styles['CustomTitle']))
+        # Add title
+        story.append(Paragraph("Resume Analysis Report", self.styles['ReportTitle']))
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#1a1a2e')))
+        story.append(Spacer(1, 20))
+        
+        # Add metadata
+        date_str = datetime.datetime.now().strftime("%B %d, %Y at %H:%M")
+        story.append(Paragraph(f"<b>Analysis Date:</b> {date_str}", self.styles['BodyText']))
+        story.append(Paragraph(f"<b>Document:</b> {resume_name}", self.styles['BodyText']))
+        story.append(Paragraph(f"<b>Generated by:</b> {Config.COMPANY_NAME} v{Config.VERSION}", self.styles['BodyText']))
+        story.append(Spacer(1, 30))
+        
+        # Add overall score section
+        story.append(Paragraph("Overall ATS Score", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+        
+        # Score display with color
+        score_color = self._get_score_color(result.overall_score)
+        story.append(Spacer(1, 10))
         story.append(Paragraph(
-            f"Generated on {datetime.now().strftime('%B %d, %Y at %I:%M %p')}",
-            self.styles['CustomSubtitle']
+            f"<font color='{score_color}'><b>{result.overall_score}/100</b></font>",
+            self.styles['ScoreText']
+        ))
+        story.append(Paragraph(
+            f"<font color='{score_color}'>{self._get_score_label(result.overall_score)}</font>",
+            ParagraphStyle('ScoreLabel', parent=self.styles['Normal'], 
+                          alignment=TA_CENTER, fontSize=14)
         ))
         story.append(Spacer(1, 20))
         
-        # Horizontal line
-        story.append(HRFlowable(
-            width="100%",
-            thickness=2,
-            color=colors.HexColor('#e94560'),
-            spaceAfter=20
-        ))
-        
-        # Executive Summary Section
-        story.append(Paragraph("Executive Summary", self.styles['SectionHeader']))
-        
-        # Score Card Table
-        score = result.ats_score
+        # Score breakdown table
         score_data = [
-            ['Metric', 'Score', 'Rating'],
-            ['Overall ATS Score', f'{score.overall_score:.1f}/100', score.get_letter_grade()],
-            ['Skill Match', f'{score.skill_match_score:.1f}/100', self._get_rating(score.skill_match_score)],
-            ['Content Similarity', f'{score.content_similarity_score:.1f}/100', self._get_rating(score.content_similarity_score)],
-            ['Keyword Coverage', f'{score.keyword_density_score:.1f}/100', self._get_rating(score.keyword_density_score)],
-            ['Experience Match', f'{score.experience_match_score:.1f}/100', self._get_rating(score.experience_match_score)],
+            ['Component', 'Score', 'Weight'],
+            ['Skill Match', f"{result.skill_match_score}%", f"{int(Config.SKILL_MATCH_WEIGHT * 100)}%"],
+            ['Content Similarity', f"{result.content_similarity_score}%", f"{int(Config.CONTENT_SIMILARITY_WEIGHT * 100)}%"],
+            ['Keyword Match', f"{result.keyword_match_score}%", f"{int(Config.KEYWORD_DENSITY_WEIGHT * 100)}%"],
         ]
         
         score_table = Table(score_data, colWidths=[200, 100, 100])
         score_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#16213e')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 11),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
             ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
             ('TOPPADDING', (0, 0), (-1, 0), 12),
             ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f5f5f5')),
-            ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#1a1a2e')),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#ddd')),
-            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
-            ('TOPPADDING', (0, 1), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cccccc')),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+            ('TOPPADDING', (0, 1), (-1, -1), 8),
         ]))
         story.append(score_table)
-        story.append(Spacer(1, 20))
+        story.append(Spacer(1, 30))
         
-        # Interpretation
-        story.append(Paragraph(
-            f"<b>Overall Assessment:</b> {score.get_score_interpretation()}",
-            self.styles['BodyText']
-        ))
-        story.append(Spacer(1, 20))
-        
-        # Skills Analysis Section
-        story.append(Paragraph("Skills Analysis", self.styles['SectionHeader']))
-        
-        # Matched Skills
-        matched_skills = result.analysis.get("matched_skills", [])
-        if matched_skills:
-            story.append(Paragraph("<b>✓ Matched Skills:</b>", self.styles['BodyText']))
-            skills_text = ", ".join(matched_skills[:20])
-            if len(matched_skills) > 20:
-                skills_text += f" ... and {len(matched_skills) - 20} more"
-            story.append(Paragraph(skills_text, self.styles['BulletPoint']))
-        
+        # Matched Skills Section
+        story.append(Paragraph("Matched Skills", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
         story.append(Spacer(1, 10))
         
-        # Missing Skills
-        missing_skills = result.analysis.get("missing_skills", [])
-        if missing_skills:
-            story.append(Paragraph("<b>✗ Missing Skills:</b>", self.styles['BodyText']))
-            skills_text = ", ".join(missing_skills[:15])
-            if len(missing_skills) > 15:
-                skills_text += f" ... and {len(missing_skills) - 15} more"
-            story.append(Paragraph(skills_text, self.styles['BulletPoint']))
+        if result.matched_skills:
+            story.append(Paragraph(
+                f"<b>{len(result.matched_skills)}</b> skills from the job description found in your resume:",
+                self.styles['BodyText']
+            ))
+            story.append(Spacer(1, 5))
+            
+            # Skills by category
+            for category, skills in result.skill_categories.items():
+                story.append(Paragraph(f"<b>{category}:</b>", self.styles['SubsectionHeader']))
+                skills_text = ", ".join(sorted(skills))
+                story.append(Paragraph(f"• {skills_text}", self.styles['BulletPoint']))
+        else:
+            story.append(Paragraph("No matching skills found.", self.styles['BodyText']))
+        story.append(Spacer(1, 20))
         
+        # Missing Skills Section
+        story.append(Paragraph("Missing Skills", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
         story.append(Spacer(1, 10))
         
-        # Additional Skills
-        additional_skills = result.analysis.get("additional_skills", [])
-        if additional_skills:
-            story.append(Paragraph("<b>+ Additional Skills (Not Required but Valuable):</b>", self.styles['BodyText']))
-            skills_text = ", ".join(additional_skills[:15])
-            if len(additional_skills) > 15:
-                skills_text += f" ... and {len(additional_skills) - 15} more"
-            story.append(Paragraph(skills_text, self.styles['BulletPoint']))
-        
+        if result.missing_skills:
+            story.append(Paragraph(
+                f"<b>{len(result.missing_skills)}</b> skills from the job description not found in your resume:",
+                self.styles['BodyText']
+            ))
+            story.append(Spacer(1, 5))
+            
+            for category, skills in result.missing_categories.items():
+                story.append(Paragraph(f"<b>{category}:</b>", self.styles['SubsectionHeader']))
+                skills_text = ", ".join(sorted(skills))
+                story.append(Paragraph(f"• {skills_text}", self.styles['BulletPoint']))
+        else:
+            story.append(Paragraph("All required skills are present in your resume!", self.styles['BodyText']))
         story.append(Spacer(1, 20))
         
         # Strengths Section
-        story.append(Paragraph("Key Strengths", self.styles['SectionHeader']))
+        story.append(Paragraph("Strengths", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+        story.append(Spacer(1, 10))
+        
         for strength in result.strengths:
             story.append(Paragraph(f"✓ {strength}", self.styles['BulletPoint']))
-        story.append(Spacer(1, 15))
+        story.append(Spacer(1, 20))
         
-        # Areas for Improvement Section
+        # Weaknesses Section
         story.append(Paragraph("Areas for Improvement", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+        story.append(Spacer(1, 10))
+        
         for weakness in result.weaknesses:
-            story.append(Paragraph(f"• {weakness}", self.styles['BulletPoint']))
-        story.append(Spacer(1, 15))
+            story.append(Paragraph(f"⚠ {weakness}", self.styles['BulletPoint']))
+        story.append(Spacer(1, 20))
         
         # Recommendations Section
         story.append(Paragraph("Recommendations", self.styles['SectionHeader']))
+        story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+        story.append(Spacer(1, 10))
+        
         for i, rec in enumerate(result.recommendations, 1):
             story.append(Paragraph(f"{i}. {rec}", self.styles['BulletPoint']))
-        
         story.append(Spacer(1, 30))
         
         # Footer
-        story.append(HRFlowable(
-            width="100%",
-            thickness=1,
-            color=colors.HexColor('#ddd'),
-            spaceBefore=20
-        ))
-        
+        story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#1a1a2e')))
+        story.append(Spacer(1, 10))
         story.append(Paragraph(
-            "This report was generated by AI Resume Analyzer. "
-            "Scores are calculated using advanced NLP techniques including "
-            "TF-IDF vectorization and cosine similarity analysis.",
-            ParagraphStyle(
-                'Footer',
-                parent=self.styles['Normal'],
-                fontSize=8,
-                textColor=colors.HexColor('#888'),
-                alignment=TA_CENTER,
-                spaceBefore=10
-            )
+            f"This report was automatically generated by {Config.COMPANY_NAME}. "
+            f"For best results, tailor your resume to each specific job application.",
+            ParagraphStyle('Footer', parent=self.styles['Normal'], 
+                          fontSize=8, textColor=colors.gray, alignment=TA_CENTER)
         ))
         
-        # Build PDF
+        # Build the PDF
         doc.build(story)
         buffer.seek(0)
         return buffer.getvalue()
     
-    def _get_rating(self, score: float) -> str:
-        """Get text rating based on score."""
-        if score >= 80:
-            return "Excellent"
-        elif score >= 60:
-            return "Good"
-        elif score >= 40:
-            return "Fair"
+    def _get_score_color(self, score: float) -> str:
+        """Get color based on score value."""
+        if score >= Config.EXCELLENT_SCORE:
+            return '#28a745'  # Green
+        elif score >= Config.GOOD_SCORE:
+            return '#5cb85c'  # Light green
+        elif score >= Config.FAIR_SCORE:
+            return '#ffc107'  # Yellow
         else:
-            return "Needs Work"
+            return '#dc3545'  # Red
+    
+    def _get_score_label(self, score: float) -> str:
+        """Get label based on score value."""
+        if score >= Config.EXCELLENT_SCORE:
+            return 'Excellent Match'
+        elif score >= Config.GOOD_SCORE:
+            return 'Good Match'
+        elif score >= Config.FAIR_SCORE:
+            return 'Fair Match'
+        else:
+            return 'Needs Improvement'
 
 
-# =============================================================================
-# STREAMLIT UI CONFIGURATION
-# =============================================================================
+# ============================================================================
+# STREAMLIT UI
+# ============================================================================
 
-def configure_page():
-    """Configure Streamlit page settings and custom CSS."""
+def setup_page():
+    """Configure Streamlit page settings and apply custom styling."""
     st.set_page_config(
-        page_title="AI Resume Analyzer | ATS Score Checker",
-        page_icon="📄",
+        page_title=Config.APP_TITLE,
+        page_icon=Config.APP_ICON,
         layout="wide",
         initial_sidebar_state="expanded"
     )
@@ -1490,560 +1055,511 @@ def configure_page():
     # Custom CSS for dark theme and professional styling
     st.markdown("""
     <style>
-        /* Main theme colors */
-        :root {
-            --primary-color: #e94560;
-            --secondary-color: #0f3460;
-            --background-dark: #1a1a2e;
-            --background-light: #16213e;
-            --text-color: #eaeaea;
-            --accent-color: #00d9ff;
-        }
-        
-        /* Global styles */
-        .stApp {
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        /* Main container styling */
+        .main {
+            background-color: #0e1117;
         }
         
         /* Header styling */
         .main-header {
-            background: linear-gradient(90deg, #e94560, #0f3460);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            font-size: 3rem;
-            font-weight: 800;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 2rem;
+            border-radius: 15px;
+            margin-bottom: 2rem;
             text-align: center;
-            margin-bottom: 0;
-            padding: 20px 0 10px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
         
-        .sub-header {
+        .main-header h1 {
+            color: #ffffff;
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .main-header p {
             color: #a0a0a0;
+            font-size: 1.1rem;
+        }
+        
+        /* Score display */
+        .score-container {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 2rem;
+            border-radius: 15px;
             text-align: center;
+            margin: 1rem 0;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+        
+        .score-value {
+            font-size: 4rem;
+            font-weight: bold;
+            margin: 0;
+        }
+        
+        .score-label {
             font-size: 1.2rem;
-            margin-bottom: 30px;
+            color: #a0a0a0;
+            margin-top: 0.5rem;
         }
         
         /* Card styling */
         .metric-card {
-            background: linear-gradient(145deg, #1e1e30, #252540);
-            border-radius: 15px;
-            padding: 25px;
-            border: 1px solid rgba(233, 69, 96, 0.3);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-            margin-bottom: 20px;
+            background-color: #1a1a2e;
+            padding: 1.5rem;
+            border-radius: 10px;
+            margin: 0.5rem 0;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }
         
-        .score-display {
-            font-size: 4rem;
-            font-weight: 800;
-            text-align: center;
-            background: linear-gradient(135deg, #e94560, #00d9ff);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin: 10px 0;
+        .metric-card h3 {
+            color: #ffffff;
+            margin-bottom: 0.5rem;
         }
         
-        .grade-badge {
-            display: inline-block;
-            padding: 8px 20px;
-            border-radius: 20px;
-            font-weight: bold;
-            font-size: 1.2rem;
-            margin: 10px 0;
+        .metric-card p {
+            color: #a0a0a0;
+            margin: 0;
         }
         
-        .grade-a { background: linear-gradient(135deg, #00b894, #00cec9); color: white; }
-        .grade-b { background: linear-gradient(135deg, #0984e3, #74b9ff); color: white; }
-        .grade-c { background: linear-gradient(135deg, #fdcb6e, #f39c12); color: white; }
-        .grade-d { background: linear-gradient(135deg, #e17055, #d63031); color: white; }
-        
-        /* Skills styling */
+        /* Skills tags */
         .skill-tag {
             display: inline-block;
-            padding: 5px 12px;
-            margin: 3px;
-            border-radius: 15px;
+            padding: 0.4rem 0.8rem;
+            margin: 0.2rem;
+            border-radius: 20px;
             font-size: 0.85rem;
             font-weight: 500;
         }
         
         .skill-matched {
-            background: rgba(0, 184, 148, 0.2);
-            color: #00b894;
-            border: 1px solid #00b894;
+            background-color: #28a74533;
+            color: #28a745;
+            border: 1px solid #28a745;
         }
         
         .skill-missing {
-            background: rgba(214, 48, 49, 0.2);
-            color: #ff6b6b;
-            border: 1px solid #ff6b6b;
+            background-color: #dc354533;
+            color: #dc3545;
+            border: 1px solid #dc3545;
         }
         
-        .skill-additional {
-            background: rgba(9, 132, 227, 0.2);
-            color: #74b9ff;
-            border: 1px solid #74b9ff;
+        .skill-extra {
+            background-color: #17a2b833;
+            color: #17a2b8;
+            border: 1px solid #17a2b8;
         }
         
-        /* Section headers */
+        /* Section styling */
         .section-header {
-            color: #e94560;
+            color: #ffffff;
             font-size: 1.4rem;
             font-weight: 600;
-            margin: 25px 0 15px 0;
-            padding-bottom: 10px;
-            border-bottom: 2px solid rgba(233, 69, 96, 0.3);
+            margin: 1.5rem 0 1rem 0;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #16213e;
         }
         
-        /* Sidebar styling */
-        section[data-testid="stSidebar"] {
-            background: linear-gradient(180deg, #1a1a2e, #16213e);
-            border-right: 1px solid rgba(233, 69, 96, 0.3);
+        /* Insight cards */
+        .insight-card {
+            background-color: #16213e;
+            padding: 1rem;
+            border-radius: 8px;
+            margin: 0.5rem 0;
+            border-left: 4px solid;
         }
         
-        section[data-testid="stSidebar"] .stMarkdown {
-            color: #eaeaea;
+        .insight-strength {
+            border-left-color: #28a745;
+        }
+        
+        .insight-weakness {
+            border-left-color: #ffc107;
+        }
+        
+        .insight-recommendation {
+            border-left-color: #17a2b8;
+        }
+        
+        /* Progress bar customization */
+        .stProgress > div > div > div > div {
+            background-color: #28a745;
         }
         
         /* Button styling */
         .stButton > button {
-            background: linear-gradient(135deg, #e94560, #0f3460);
+            background: linear-gradient(135deg, #0f3460 0%, #16213e 100%);
             color: white;
             border: none;
-            padding: 12px 30px;
-            border-radius: 25px;
+            padding: 0.75rem 2rem;
+            border-radius: 8px;
             font-weight: 600;
-            font-size: 1rem;
             transition: all 0.3s ease;
-            width: 100%;
         }
         
         .stButton > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 5px 20px rgba(233, 69, 96, 0.4);
+            background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         }
         
         /* File uploader styling */
         .stFileUploader {
-            background: rgba(255, 255, 255, 0.05);
+            background-color: #1a1a2e;
             border-radius: 10px;
-            padding: 20px;
-            border: 2px dashed rgba(233, 69, 96, 0.3);
+            padding: 1rem;
         }
         
         /* Text area styling */
         .stTextArea textarea {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(233, 69, 96, 0.3);
-            border-radius: 10px;
-            color: #eaeaea;
-        }
-        
-        /* Progress bar custom styling */
-        .stProgress > div > div {
-            background: linear-gradient(90deg, #e94560, #00d9ff);
+            background-color: #1a1a2e;
+            color: #ffffff;
+            border: 1px solid #16213e;
+            border-radius: 8px;
         }
         
         /* Expander styling */
         .streamlit-expanderHeader {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
+            background-color: #1a1a2e;
+            border-radius: 8px;
         }
         
-        /* Alert boxes */
-        .success-box {
-            background: rgba(0, 184, 148, 0.1);
-            border-left: 4px solid #00b894;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-        
-        .warning-box {
-            background: rgba(253, 203, 110, 0.1);
-            border-left: 4px solid #fdcb6e;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-        
-        .info-box {
-            background: rgba(116, 185, 255, 0.1);
-            border-left: 4px solid #74b9ff;
-            padding: 15px;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-        
-        /* Stats row */
-        .stats-row {
-            display: flex;
-            justify-content: space-around;
-            flex-wrap: wrap;
-            gap: 15px;
-            margin: 20px 0;
-        }
-        
-        .stat-item {
-            text-align: center;
-            padding: 15px 25px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            min-width: 120px;
-        }
-        
-        .stat-value {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #00d9ff;
-        }
-        
-        .stat-label {
-            font-size: 0.9rem;
-            color: #a0a0a0;
-            margin-top: 5px;
+        /* Sidebar styling */
+        .css-1d391kg {
+            background-color: #0e1117;
         }
         
         /* Hide Streamlit branding */
         #MainMenu {visibility: hidden;}
         footer {visibility: hidden;}
+        header {visibility: hidden;}
         
-        /* Responsive adjustments */
-        @media (max-width: 768px) {
-            .main-header {
-                font-size: 2rem;
-            }
-            .score-display {
-                font-size: 3rem;
-            }
+        /* Custom divider */
+        .custom-divider {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #16213e, transparent);
+            margin: 2rem 0;
         }
     </style>
     """, unsafe_allow_html=True)
 
 
-# =============================================================================
-# STREAMLIT UI COMPONENTS
-# =============================================================================
-
-def render_header():
-    """Render the application header."""
-    st.markdown('<h1 class="main-header">🎯 AI Resume Analyzer</h1>', unsafe_allow_html=True)
-    st.markdown(
-        '<p class="sub-header">Advanced ATS Scoring System powered by Machine Learning & NLP</p>',
-        unsafe_allow_html=True
-    )
+def display_header():
+    """Display the main application header."""
+    st.markdown("""
+    <div class="main-header">
+        <h1>📄 AI Resume Analyzer</h1>
+        <p>Professional ATS-Style Resume Analysis & Optimization System</p>
+    </div>
+    """, unsafe_allow_html=True)
 
 
-def render_sidebar():
-    """Render the sidebar with information and controls."""
-    with st.sidebar:
-        st.markdown("## 📋 How It Works")
-        st.markdown("""
-        1. **Upload** your resume (PDF format)
-        2. **Paste** the job description
-        3. **Analyze** to get your ATS score
-        4. **Download** detailed PDF report
-        """)
-        
-        st.markdown("---")
-        
-        st.markdown("## 🎯 Scoring Criteria")
-        st.markdown("""
-        - **Skill Match (35%)**: Technical & soft skills alignment
-        - **Content Similarity (30%)**: Overall resume-JD match
-        - **Keywords (20%)**: Important terms coverage
-        - **Experience (10%)**: Years of experience match
-        - **Format (5%)**: Resume structure quality
-        """)
-        
-        st.markdown("---")
-        
-        st.markdown("## 📊 Score Guide")
-        col1, col2 = st.columns(2)
-        with col1:
-            st.markdown("🟢 **80-100**: Excellent")
-            st.markdown("🔵 **60-79**: Good")
-        with col2:
-            st.markdown("🟡 **40-59**: Fair")
-            st.markdown("🔴 **0-39**: Needs Work")
-        
-        st.markdown("---")
-        
-        st.markdown("## ⚡ Features")
-        st.markdown("""
-        - ✅ TF-IDF Analysis
-        - ✅ Cosine Similarity
-        - ✅ Skill Extraction
-        - ✅ Gap Analysis
-        - ✅ PDF Reports
-        - ✅ Recommendations
-        """)
-        
-        st.markdown("---")
-        st.markdown(
-            "<p style='text-align: center; color: #666; font-size: 0.8rem;'>"
-            "Built with ❤️ using Streamlit<br>"
-            "© 2024 AI Resume Analyzer"
-            "</p>",
-            unsafe_allow_html=True
-        )
+def get_score_color(score: float) -> str:
+    """Get color hex code based on score value."""
+    if score >= Config.EXCELLENT_SCORE:
+        return '#28a745'
+    elif score >= Config.GOOD_SCORE:
+        return '#5cb85c'
+    elif score >= Config.FAIR_SCORE:
+        return '#ffc107'
+    else:
+        return '#dc3545'
 
 
-def render_score_card(score: ATSScore):
-    """Render the main score card with visual indicators."""
-    st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+def get_score_label(score: float) -> str:
+    """Get descriptive label based on score value."""
+    if score >= Config.EXCELLENT_SCORE:
+        return 'Excellent Match'
+    elif score >= Config.GOOD_SCORE:
+        return 'Good Match'
+    elif score >= Config.FAIR_SCORE:
+        return 'Fair Match'
+    else:
+        return 'Needs Improvement'
+
+
+def display_score_section(result: AnalysisResult):
+    """Display the main score section with visual elements."""
+    score_color = get_score_color(result.overall_score)
+    score_label = get_score_label(result.overall_score)
     
-    col1, col2, col3 = st.columns([1, 2, 1])
+    st.markdown(f"""
+    <div class="score-container">
+        <p class="score-value" style="color: {score_color};">{result.overall_score}</p>
+        <p class="score-label">{score_label}</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Progress bar
+    st.progress(result.overall_score / 100)
+    
+    # Score breakdown
+    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3 style="color: {get_score_color(result.skill_match_score)};">
+                {result.skill_match_score}%
+            </h3>
+            <p>Skill Match</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     with col2:
-        # Main score display
-        st.markdown(
-            f'<div class="score-display">{score.overall_score:.0f}</div>',
-            unsafe_allow_html=True
-        )
-        
-        # Letter grade badge
-        grade = score.get_letter_grade()
-        grade_class = "grade-a" if grade.startswith("A") else \
-                      "grade-b" if grade.startswith("B") else \
-                      "grade-c" if grade.startswith("C") else "grade-d"
-        
-        st.markdown(
-            f'<div style="text-align: center;">'
-            f'<span class="grade-badge {grade_class}">Grade: {grade}</span>'
-            f'</div>',
-            unsafe_allow_html=True
-        )
-        
-        st.markdown(
-            f'<p style="text-align: center; color: #a0a0a0; margin-top: 10px;">'
-            f'{score.get_score_interpretation()}</p>',
-            unsafe_allow_html=True
-        )
-        
-        # Progress bar
-        st.progress(score.overall_score / 100)
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3 style="color: {get_score_color(result.content_similarity_score)};">
+                {result.content_similarity_score}%
+            </h3>
+            <p>Content Similarity</p>
+        </div>
+        """, unsafe_allow_html=True)
     
-    st.markdown('</div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <h3 style="color: {get_score_color(result.keyword_match_score)};">
+                {result.keyword_match_score}%
+            </h3>
+            <p>Keyword Match</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 
-def render_detailed_scores(score: ATSScore):
-    """Render detailed breakdown of all scores."""
-    st.markdown('<p class="section-header">📊 Detailed Score Breakdown</p>', unsafe_allow_html=True)
-    
-    metrics = [
-        ("Skill Match", score.skill_match_score, "🎯"),
-        ("Content Similarity", score.content_similarity_score, "📝"),
-        ("Keyword Coverage", score.keyword_density_score, "🔑"),
-        ("Experience Match", score.experience_match_score, "💼"),
-        ("Format Quality", score.formatting_score, "📋")
-    ]
-    
-    cols = st.columns(len(metrics))
-    
-    for col, (name, value, icon) in zip(cols, metrics):
-        with col:
-            # Determine color based on score
-            if value >= 70:
-                color = "#00b894"
-            elif value >= 50:
-                color = "#fdcb6e"
-            else:
-                color = "#ff6b6b"
-            
-            st.markdown(
-                f"""
-                <div style="text-align: center; padding: 15px; 
-                            background: rgba(255,255,255,0.05); 
-                            border-radius: 10px; margin: 5px;">
-                    <div style="font-size: 1.5rem;">{icon}</div>
-                    <div style="font-size: 1.8rem; font-weight: bold; color: {color};">
-                        {value:.0f}%
-                    </div>
-                    <div style="font-size: 0.8rem; color: #a0a0a0; margin-top: 5px;">
-                        {name}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-
-def render_skills_analysis(analysis: Dict):
-    """Render the skills analysis section with matched and missing skills."""
-    st.markdown('<p class="section-header">🔧 Skills Analysis</p>', unsafe_allow_html=True)
+def display_skills_section(result: AnalysisResult):
+    """Display matched and missing skills in a two-column layout."""
+    st.markdown('<p class="section-header">📊 Skills Analysis</p>', unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.markdown("### ✅ Matched Skills")
-        matched_skills = analysis.get("matched_skills", [])
-        if matched_skills:
-            skills_html = " ".join([
-                f'<span class="skill-tag skill-matched">{skill}</span>'
-                for skill in matched_skills
-            ])
-            st.markdown(skills_html, unsafe_allow_html=True)
-            st.success(f"**{len(matched_skills)}** skills matched!")
+        if result.matched_skills:
+            skills_html = ""
+            for skill in sorted(result.matched_skills):
+                skills_html += f'<span class="skill-tag skill-matched">{skill}</span>'
+            st.markdown(f'<div>{skills_html}</div>', unsafe_allow_html=True)
         else:
             st.info("No matching skills found")
+        
+        # Show by category
+        if result.skill_categories:
+            with st.expander("View by Category"):
+                for category, skills in result.skill_categories.items():
+                    st.markdown(f"**{category}**")
+                    st.write(", ".join(sorted(skills)))
     
     with col2:
         st.markdown("### ❌ Missing Skills")
-        missing_skills = analysis.get("missing_skills", [])
-        if missing_skills:
-            skills_html = " ".join([
-                f'<span class="skill-tag skill-missing">{skill}</span>'
-                for skill in missing_skills
-            ])
-            st.markdown(skills_html, unsafe_allow_html=True)
-            st.warning(f"**{len(missing_skills)}** skills to add!")
+        if result.missing_skills:
+            skills_html = ""
+            for skill in sorted(result.missing_skills):
+                skills_html += f'<span class="skill-tag skill-missing">{skill}</span>'
+            st.markdown(f'<div>{skills_html}</div>', unsafe_allow_html=True)
         else:
-            st.success("You have all required skills!")
+            st.success("All required skills are present!")
+        
+        # Show by category
+        if result.missing_categories:
+            with st.expander("View by Category"):
+                for category, skills in result.missing_categories.items():
+                    st.markdown(f"**{category}**")
+                    st.write(", ".join(sorted(skills)))
     
-    # Additional skills section
-    additional_skills = analysis.get("additional_skills", [])
-    if additional_skills:
-        with st.expander("🌟 Additional Skills You Have", expanded=False):
-            skills_html = " ".join([
-                f'<span class="skill-tag skill-additional">{skill}</span>'
-                for skill in additional_skills
-            ])
-            st.markdown(skills_html, unsafe_allow_html=True)
-            st.info(f"You have **{len(additional_skills)}** additional valuable skills!")
+    # Additional skills in resume
+    if result.resume_only_skills:
+        st.markdown("### 🌟 Additional Skills (In Resume Only)")
+        skills_html = ""
+        for skill in sorted(list(result.resume_only_skills)[:20]):
+            skills_html += f'<span class="skill-tag skill-extra">{skill}</span>'
+        st.markdown(f'<div>{skills_html}</div>', unsafe_allow_html=True)
 
 
-def render_strengths_weaknesses(result: AnalysisResult):
-    """Render strengths and weaknesses sections."""
+def display_insights_section(result: AnalysisResult):
+    """Display strengths, weaknesses, and recommendations."""
+    st.markdown('<p class="section-header">💡 Insights & Recommendations</p>', unsafe_allow_html=True)
+    
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown('<p class="section-header">💪 Key Strengths</p>', unsafe_allow_html=True)
+        st.markdown("### 💪 Strengths")
         for strength in result.strengths:
-            st.markdown(
-                f'<div class="success-box">✓ {strength}</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f"""
+            <div class="insight-card insight-strength">
+                ✓ {strength}
+            </div>
+            """, unsafe_allow_html=True)
     
     with col2:
-        st.markdown('<p class="section-header">🎯 Areas for Improvement</p>', unsafe_allow_html=True)
+        st.markdown("### ⚠️ Areas for Improvement")
         for weakness in result.weaknesses:
-            st.markdown(
-                f'<div class="warning-box">• {weakness}</div>',
-                unsafe_allow_html=True
-            )
-
-
-def render_recommendations(result: AnalysisResult):
-    """Render recommendations section."""
-    st.markdown('<p class="section-header">💡 Recommendations</p>', unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="insight-card insight-weakness">
+                ⚡ {weakness}
+            </div>
+            """, unsafe_allow_html=True)
     
+    st.markdown("### 🎯 Recommendations")
     for i, rec in enumerate(result.recommendations, 1):
-        st.markdown(
-            f'<div class="info-box"><strong>Recommendation {i}:</strong> {rec}</div>',
-            unsafe_allow_html=True
-        )
+        st.markdown(f"""
+        <div class="insight-card insight-recommendation">
+            {i}. {rec}
+        </div>
+        """, unsafe_allow_html=True)
 
 
-def render_statistics(analysis: Dict, result: AnalysisResult):
-    """Render quick statistics."""
-    st.markdown('<p class="section-header">📈 Quick Statistics</p>', unsafe_allow_html=True)
+def display_keywords_section(result: AnalysisResult):
+    """Display matched keywords from job description."""
+    if result.matched_keywords:
+        with st.expander("🔑 Matched Keywords from Job Description"):
+            keywords_html = ""
+            for keyword in result.matched_keywords:
+                keywords_html += f'<span class="skill-tag skill-matched">{keyword}</span>'
+            st.markdown(f'<div>{keywords_html}</div>', unsafe_allow_html=True)
+
+
+def create_download_button(result: AnalysisResult, resume_name: str):
+    """Create download button for PDF report."""
+    report_generator = ReportGenerator()
+    pdf_bytes = report_generator.generate_report(result, resume_name)
     
-    stats = [
-        ("Total Skills Found", len(analysis.get("resume_skills", []))),
-        ("Skills Matched", len(analysis.get("matched_skills", []))),
-        ("Skills Missing", len(analysis.get("missing_skills", []))),
-        ("Resume Pages", result.resume_metadata.get("pages", "N/A")),
-    ]
-    
-    cols = st.columns(len(stats))
-    for col, (label, value) in zip(cols, stats):
-        col.metric(label, value)
+    st.download_button(
+        label="📥 Download Full PDF Report",
+        data=pdf_bytes,
+        file_name=f"resume_analysis_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+        mime="application/pdf",
+        help="Download a comprehensive PDF report of your resume analysis"
+    )
 
 
-# =============================================================================
-# MAIN APPLICATION
-# =============================================================================
+def display_sidebar():
+    """Display sidebar with information and instructions."""
+    with st.sidebar:
+        st.markdown("## 📋 How to Use")
+        st.markdown("""
+        1. **Upload Resume**: Upload your resume in PDF format
+        2. **Paste Job Description**: Copy and paste the full job description
+        3. **Analyze**: Click the analyze button to get your ATS score
+        4. **Review Results**: Check matched/missing skills and recommendations
+        5. **Download Report**: Get a detailed PDF report for your records
+        """)
+        
+        st.markdown("---")
+        
+        st.markdown("## 📊 Score Breakdown")
+        st.markdown("""
+        - **Skill Match (40%)**: How many required skills you have
+        - **Content Similarity (35%)**: Overall content alignment using TF-IDF
+        - **Keyword Match (25%)**: Important keywords from job description
+        """)
+        
+        st.markdown("---")
+        
+        st.markdown("## 🎯 Score Guide")
+        st.markdown("""
+        - **80-100**: Excellent match
+        - **60-79**: Good match
+        - **40-59**: Fair match
+        - **0-39**: Needs improvement
+        """)
+        
+        st.markdown("---")
+        
+        st.markdown("## ℹ️ About")
+        st.markdown(f"""
+        **{Config.APP_TITLE}** v{Config.VERSION}
+        
+        An AI-powered resume analysis tool that uses 
+        NLP techniques to match your resume against 
+        job descriptions, providing actionable insights 
+        to improve your application success rate.
+        """)
+
 
 def main():
     """Main application entry point."""
-    # Configure page
-    configure_page()
+    # Setup page configuration and styling
+    setup_page()
     
-    # Render header
-    render_header()
+    # Display header
+    display_header()
     
-    # Render sidebar
-    render_sidebar()
+    # Display sidebar
+    display_sidebar()
     
     # Initialize session state
     if 'analysis_result' not in st.session_state:
         st.session_state.analysis_result = None
-    if 'pdf_report' not in st.session_state:
-        st.session_state.pdf_report = None
+    if 'resume_name' not in st.session_state:
+        st.session_state.resume_name = None
     
     # Main content area
-    st.markdown("---")
-    
-    # Input section
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 1])
     
     with col1:
         st.markdown("### 📄 Upload Resume")
-        resume_file = st.file_uploader(
-            "Upload your resume in PDF format",
+        uploaded_file = st.file_uploader(
+            "Upload your resume (PDF)",
             type=['pdf'],
-            help="Please upload a PDF file with selectable text for best results"
+            help="Upload your resume in PDF format for analysis"
         )
         
-        if resume_file:
-            st.success(f"✅ Uploaded: {resume_file.name}")
+        if uploaded_file:
+            st.success(f"✅ Uploaded: {uploaded_file.name}")
     
     with col2:
         st.markdown("### 📝 Job Description")
         job_description = st.text_area(
             "Paste the job description here",
             height=200,
-            placeholder="Paste the complete job description including requirements, responsibilities, and qualifications...",
-            help="Include as much detail as possible for better analysis"
+            placeholder="Paste the full job description here...",
+            help="Copy and paste the complete job description from the job posting"
         )
     
     # Analyze button
     st.markdown("---")
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        analyze_button = st.button("🔍 Analyze Resume", use_container_width=True)
+    analyze_col1, analyze_col2, analyze_col3 = st.columns([1, 2, 1])
+    with analyze_col2:
+        analyze_button = st.button(
+            "🔍 Analyze Resume",
+            use_container_width=True,
+            type="primary"
+        )
     
-    # Analysis logic
+    # Process analysis
     if analyze_button:
-        if not resume_file:
-            st.error("⚠️ Please upload a resume PDF file.")
-        elif not job_description.strip():
-            st.error("⚠️ Please enter a job description.")
+        if not uploaded_file:
+            st.error("⚠️ Please upload a resume PDF file")
+        elif not job_description or len(job_description.strip()) < 50:
+            st.error("⚠️ Please provide a detailed job description (at least 50 characters)")
         else:
-            with st.spinner("🔄 Analyzing your resume... This may take a moment."):
-                try:
-                    # Initialize analyzer
-                    analyzer = ResumeAnalyzer()
+            try:
+                with st.spinner("🔄 Analyzing your resume..."):
+                    # Initialize processors
+                    text_processor = TextProcessor()
+                    ats_engine = ATSEngine()
                     
-                    # Perform analysis
-                    result = analyzer.analyze(resume_file, job_description)
+                    # Extract text from PDF
+                    resume_text = text_processor.extract_text_from_pdf(uploaded_file)
                     
-                    # Store in session state
-                    st.session_state.analysis_result = result
-                    
-                    # Generate PDF report
-                    report_generator = ReportGenerator()
-                    pdf_bytes = report_generator.generate_report(result)
-                    st.session_state.pdf_report = pdf_bytes
-                    
-                    st.success("✅ Analysis complete!")
-                    
-                except Exception as e:
-                    st.error(f"❌ Error during analysis: {str(e)}")
-                    st.exception(e)
+                    if not resume_text or len(resume_text.strip()) < 50:
+                        st.error("⚠️ Could not extract sufficient text from the PDF. Please ensure your resume is text-based, not a scanned image.")
+                    else:
+                        # Perform analysis
+                        result = ats_engine.analyze(resume_text, job_description)
+                        
+                        # Store results in session state
+                        st.session_state.analysis_result = result
+                        st.session_state.resume_name = uploaded_file.name
+                        
+                        st.success("✅ Analysis complete!")
+                        
+            except Exception as e:
+                st.error(f"❌ An error occurred during analysis: {str(e)}")
+                logging.error(f"Analysis error: {e}")
     
     # Display results if available
     if st.session_state.analysis_result:
@@ -2052,79 +1568,52 @@ def main():
         st.markdown("---")
         st.markdown("## 📊 Analysis Results")
         
-        # Main score card
-        render_score_card(result.ats_score)
+        # Score section
+        display_score_section(result)
         
-        # Detailed scores
-        render_detailed_scores(result.ats_score)
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
         
-        st.markdown("---")
+        # Skills section
+        display_skills_section(result)
         
-        # Statistics
-        render_statistics(result.analysis, result)
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
         
-        st.markdown("---")
+        # Keywords section
+        display_keywords_section(result)
         
-        # Skills analysis
-        render_skills_analysis(result.analysis)
+        # Insights section
+        display_insights_section(result)
         
-        st.markdown("---")
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
         
-        # Strengths and weaknesses
-        render_strengths_weaknesses(result)
-        
-        st.markdown("---")
-        
-        # Recommendations
-        render_recommendations(result)
-        
-        st.markdown("---")
-        
-        # Download section
+        # Download report button
         st.markdown("### 📥 Download Report")
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.session_state.pdf_report:
-                st.download_button(
-                    label="📄 Download PDF Report",
-                    data=st.session_state.pdf_report,
-                    file_name=f"resume_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+        create_download_button(result, st.session_state.resume_name)
         
-        # Additional analysis details (expandable)
-        with st.expander("🔬 Technical Details", expanded=False):
-            st.markdown("#### Analysis Metadata")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Resume Statistics:**")
-                st.write(f"- Word Count: {result.analysis.get('resume_word_count', 'N/A')}")
-                st.write(f"- Pages: {result.resume_metadata.get('pages', 'N/A')}")
-                st.write(f"- Extraction Method: {result.resume_metadata.get('extraction_method', 'N/A')}")
-                years_exp = result.analysis.get('resume_years_experience')
-                st.write(f"- Years of Experience Detected: {years_exp if years_exp else 'Not detected'}")
+        # Summary statistics
+        with st.expander("📈 Detailed Statistics"):
+            stat_col1, stat_col2, stat_col3, stat_col4 = st.columns(4)
             
-            with col2:
-                st.write("**Job Description Statistics:**")
-                st.write(f"- Word Count: {result.analysis.get('jd_word_count', 'N/A')}")
-                st.write(f"- Skills Required: {len(result.analysis.get('jd_skills', []))}")
-                jd_years = result.analysis.get('jd_years_required')
-                st.write(f"- Experience Required: {jd_years if jd_years else 'Not specified'}")
-            
-            st.markdown("#### Skill Categories in Resume")
-            categories = result.analysis.get("resume_skill_categories", {})
-            if categories:
-                for category, skills in categories.items():
-                    st.write(f"**{category}:** {', '.join(skills[:10])}")
-            
-            st.markdown("#### Analysis Timestamp")
-            st.write(f"Generated at: {result.timestamp}")
+            with stat_col1:
+                st.metric("Total Matched Skills", len(result.matched_skills))
+            with stat_col2:
+                st.metric("Missing Skills", len(result.missing_skills))
+            with stat_col3:
+                st.metric("Additional Skills", len(result.resume_only_skills))
+            with stat_col4:
+                st.metric("Matched Keywords", len(result.matched_keywords))
 
 
-# =============================================================================
+# ============================================================================
 # APPLICATION ENTRY POINT
-# =============================================================================
+# ============================================================================
 
 if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    # Run the application
     main()
