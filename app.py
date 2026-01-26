@@ -16,9 +16,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 import datetime
 from dataclasses import dataclass
 
@@ -37,7 +37,7 @@ class Config:
     FAIR_SCORE = 40
 
 # ============================================================================
-# STOPWORDS (No NLTK needed)
+# STOPWORDS
 # ============================================================================
 
 STOPWORDS = {
@@ -110,14 +110,12 @@ SKILLS_DB = {
 }
 
 def get_all_skills() -> Set[str]:
-    """Get all skills from database."""
     all_skills = set()
     for category_skills in SKILLS_DB.values():
         all_skills.update(category_skills)
     return all_skills
 
 def get_skill_category(skill: str) -> Optional[str]:
-    """Get category for a skill."""
     skill_lower = skill.lower()
     for category, skills in SKILLS_DB.items():
         if skill_lower in skills:
@@ -129,7 +127,6 @@ def get_skill_category(skill: str) -> Optional[str]:
 # ============================================================================
 
 def extract_text_from_pdf(pdf_file) -> str:
-    """Extract text from PDF file."""
     try:
         pdf_reader = PyPDF2.PdfReader(pdf_file)
         text_parts = []
@@ -142,7 +139,6 @@ def extract_text_from_pdf(pdf_file) -> str:
         raise ValueError(f"PDF extraction failed: {str(e)}")
 
 def clean_text(text: str) -> str:
-    """Clean and normalize text."""
     if not text:
         return ""
     text = text.lower()
@@ -153,28 +149,22 @@ def clean_text(text: str) -> str:
     return text
 
 def tokenize(text: str) -> List[str]:
-    """Simple tokenization."""
     words = text.split()
     return [w for w in words if w not in STOPWORDS and len(w) > 1 and not w.isdigit()]
 
 def extract_skills(text: str) -> Set[str]:
-    """Extract skills from text."""
     if not text:
         return set()
-    
     text_lower = text.lower()
     found_skills = set()
     all_skills = get_all_skills()
-    
     for skill in all_skills:
         pattern = r'\b' + re.escape(skill) + r'\b'
         if re.search(pattern, text_lower):
             found_skills.add(skill)
-    
     return found_skills
 
 def categorize_skills(skills: Set[str]) -> Dict[str, List[str]]:
-    """Categorize skills by domain."""
     categorized = {}
     for skill in skills:
         category = get_skill_category(skill)
@@ -187,7 +177,6 @@ def categorize_skills(skills: Set[str]) -> Dict[str, List[str]]:
     return categorized
 
 def get_keywords(text: str, top_n: int = 30) -> List[str]:
-    """Extract top keywords from text."""
     cleaned = clean_text(text)
     tokens = tokenize(cleaned)
     freq = Counter(tokens)
@@ -218,7 +207,6 @@ class AnalysisResult:
 # ============================================================================
 
 def calculate_similarity(text1: str, text2: str) -> float:
-    """Calculate TF-IDF cosine similarity."""
     try:
         t1 = clean_text(text1)
         t2 = clean_text(text2)
@@ -232,9 +220,6 @@ def calculate_similarity(text1: str, text2: str) -> float:
         return 0.0
 
 def analyze_resume(resume_text: str, job_description: str) -> AnalysisResult:
-    """Analyze resume against job description."""
-    
-    # Extract skills
     resume_skills = extract_skills(resume_text)
     jd_skills = extract_skills(job_description)
     
@@ -242,7 +227,6 @@ def analyze_resume(resume_text: str, job_description: str) -> AnalysisResult:
     missing = jd_skills - resume_skills
     extra = resume_skills - jd_skills
     
-    # Calculate scores
     skill_score = (len(matched) / len(jd_skills) * 100) if jd_skills else 100.0
     content_score = calculate_similarity(resume_text, job_description)
     
@@ -257,7 +241,6 @@ def analyze_resume(resume_text: str, job_description: str) -> AnalysisResult:
         keyword_score * Config.KEYWORD_DENSITY_WEIGHT
     )
     
-    # Generate insights
     strengths = []
     if len(matched) >= 5:
         strengths.append(f"Strong skill match with {len(matched)} matching skills")
@@ -306,19 +289,68 @@ def analyze_resume(resume_text: str, job_description: str) -> AnalysisResult:
     )
 
 # ============================================================================
-# PDF REPORT
+# PDF REPORT - FIXED VERSION
 # ============================================================================
 
 def generate_pdf_report(result: AnalysisResult, resume_name: str) -> bytes:
-    """Generate PDF report."""
+    """Generate PDF report with fresh styles each time."""
     buffer = io.BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=50, leftMargin=50, topMargin=50, bottomMargin=50)
-    styles = getSampleStyleSheet()
+    doc = SimpleDocTemplate(
+        buffer, 
+        pagesize=A4, 
+        rightMargin=50, 
+        leftMargin=50, 
+        topMargin=50, 
+        bottomMargin=50
+    )
     
-    # Custom styles
-    title_style = ParagraphStyle('Title', parent=styles['Title'], fontSize=22, spaceAfter=20, alignment=TA_CENTER)
-    heading_style = ParagraphStyle('Heading', parent=styles['Heading1'], fontSize=14, spaceBefore=15, spaceAfter=8)
-    body_style = ParagraphStyle('Body', parent=styles['Normal'], fontSize=10, spaceAfter=5)
+    # Create fresh styles each time (not using getSampleStyleSheet)
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        fontName='Helvetica-Bold',
+        fontSize=22,
+        leading=26,
+        alignment=TA_CENTER,
+        spaceAfter=20,
+        textColor=colors.HexColor('#1a1a2e')
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        fontName='Helvetica-Bold',
+        fontSize=14,
+        leading=18,
+        spaceBefore=15,
+        spaceAfter=8,
+        textColor=colors.HexColor('#16213e')
+    )
+    
+    body_style = ParagraphStyle(
+        'CustomBody',
+        fontName='Helvetica',
+        fontSize=10,
+        leading=14,
+        spaceAfter=5,
+        alignment=TA_LEFT
+    )
+    
+    center_style = ParagraphStyle(
+        'CustomCenter',
+        fontName='Helvetica-Bold',
+        fontSize=28,
+        leading=32,
+        alignment=TA_CENTER,
+        spaceAfter=10
+    )
+    
+    small_center = ParagraphStyle(
+        'CustomSmallCenter',
+        fontName='Helvetica',
+        fontSize=12,
+        alignment=TA_CENTER,
+        spaceAfter=15,
+        textColor=colors.gray
+    )
     
     story = []
     
@@ -328,56 +360,116 @@ def generate_pdf_report(result: AnalysisResult, resume_name: str) -> bytes:
     story.append(Spacer(1, 15))
     
     # Meta info
-    story.append(Paragraph(f"<b>Date:</b> {datetime.datetime.now().strftime('%B %d, %Y')}", body_style))
-    story.append(Paragraph(f"<b>Resume:</b> {resume_name}", body_style))
+    date_str = datetime.datetime.now().strftime('%B %d, %Y at %H:%M')
+    story.append(Paragraph(f"<b>Analysis Date:</b> {date_str}", body_style))
+    story.append(Paragraph(f"<b>Resume File:</b> {resume_name}", body_style))
+    story.append(Paragraph(f"<b>Generated by:</b> AI Resume Analyzer v{Config.VERSION}", body_style))
     story.append(Spacer(1, 20))
     
-    # Score
-    score_color = '#28a745' if result.overall_score >= 70 else '#ffc107' if result.overall_score >= 50 else '#dc3545'
-    story.append(Paragraph("Overall Score", heading_style))
-    story.append(Paragraph(f"<font size=28 color='{score_color}'><b>{result.overall_score}/100</b></font>", 
-                          ParagraphStyle('Score', alignment=TA_CENTER, spaceAfter=15)))
+    # Score section
+    story.append(Paragraph("Overall ATS Score", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 10))
     
-    # Score breakdown
+    score_color = '#28a745' if result.overall_score >= 70 else '#ffc107' if result.overall_score >= 50 else '#dc3545'
+    score_label = 'Excellent' if result.overall_score >= 80 else 'Good' if result.overall_score >= 60 else 'Fair' if result.overall_score >= 40 else 'Needs Work'
+    
+    story.append(Paragraph(f"<font color='{score_color}'>{result.overall_score}/100</font>", center_style))
+    story.append(Paragraph(f"<font color='{score_color}'>{score_label} Match</font>", small_center))
+    story.append(Spacer(1, 15))
+    
+    # Score breakdown table
     score_data = [
-        ['Component', 'Score'],
-        ['Skill Match', f"{result.skill_match_score}%"],
-        ['Content Similarity', f"{result.content_similarity_score}%"],
-        ['Keyword Match', f"{result.keyword_match_score}%"],
+        ['Component', 'Score', 'Weight'],
+        ['Skill Match', f"{result.skill_match_score}%", '40%'],
+        ['Content Similarity', f"{result.content_similarity_score}%", '35%'],
+        ['Keyword Match', f"{result.keyword_match_score}%", '25%'],
     ]
-    table = Table(score_data, colWidths=[200, 100])
+    
+    table = Table(score_data, colWidths=[180, 100, 80])
     table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1a1a2e')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('GRID', (0, 0), (-1, -1), 1, colors.grey),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f5f5f5')),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+        ('TOPPADDING', (0, 0), (-1, 0), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#cccccc')),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ('TOPPADDING', (0, 1), (-1, -1), 8),
     ]))
     story.append(table)
-    story.append(Spacer(1, 20))
+    story.append(Spacer(1, 25))
     
     # Matched Skills
     story.append(Paragraph("Matched Skills", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 8))
+    
     if result.matched_skills:
-        story.append(Paragraph(", ".join(sorted(result.matched_skills)), body_style))
+        story.append(Paragraph(f"<b>{len(result.matched_skills)}</b> skills matched:", body_style))
+        skills_text = ", ".join(sorted(result.matched_skills))
+        story.append(Paragraph(skills_text, body_style))
     else:
-        story.append(Paragraph("No matching skills found", body_style))
-    story.append(Spacer(1, 10))
+        story.append(Paragraph("No matching skills found.", body_style))
+    story.append(Spacer(1, 15))
     
     # Missing Skills
     story.append(Paragraph("Missing Skills", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 8))
+    
     if result.missing_skills:
-        story.append(Paragraph(", ".join(sorted(result.missing_skills)), body_style))
+        story.append(Paragraph(f"<b>{len(result.missing_skills)}</b> skills to add:", body_style))
+        skills_text = ", ".join(sorted(result.missing_skills))
+        story.append(Paragraph(skills_text, body_style))
     else:
-        story.append(Paragraph("All skills matched!", body_style))
-    story.append(Spacer(1, 10))
+        story.append(Paragraph("All required skills are present!", body_style))
+    story.append(Spacer(1, 15))
+    
+    # Strengths
+    story.append(Paragraph("Strengths", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 8))
+    
+    for strength in result.strengths:
+        story.append(Paragraph(f"+ {strength}", body_style))
+    story.append(Spacer(1, 15))
+    
+    # Areas for Improvement
+    story.append(Paragraph("Areas for Improvement", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 8))
+    
+    for weakness in result.weaknesses:
+        story.append(Paragraph(f"- {weakness}", body_style))
+    story.append(Spacer(1, 15))
     
     # Recommendations
     story.append(Paragraph("Recommendations", heading_style))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#e0e0e0')))
+    story.append(Spacer(1, 8))
+    
     for i, rec in enumerate(result.recommendations, 1):
         story.append(Paragraph(f"{i}. {rec}", body_style))
+    story.append(Spacer(1, 25))
     
+    # Footer
+    story.append(HRFlowable(width="100%", thickness=2, color=colors.HexColor('#1a1a2e')))
+    story.append(Spacer(1, 10))
+    
+    footer_style = ParagraphStyle(
+        'Footer',
+        fontName='Helvetica',
+        fontSize=8,
+        alignment=TA_CENTER,
+        textColor=colors.gray
+    )
+    story.append(Paragraph("Generated by AI Resume Analyzer - Optimize your resume for success!", footer_style))
+    
+    # Build PDF
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -398,7 +490,7 @@ def get_score_label(score):
     if score >= 40: return 'Fair Match'
     return 'Needs Improvement'
 
-# Apply CSS
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -609,13 +701,16 @@ if st.session_state.result:
     
     # Download
     st.markdown("### 📥 Download Report")
-    pdf = generate_pdf_report(result, st.session_state.resume_name)
-    st.download_button(
-        "📥 Download PDF Report",
-        data=pdf,
-        file_name=f"resume_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
-        mime="application/pdf"
-    )
+    try:
+        pdf_data = generate_pdf_report(result, st.session_state.resume_name)
+        st.download_button(
+            label="📥 Download PDF Report",
+            data=pdf_data,
+            file_name=f"resume_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf"
+        )
+    except Exception as e:
+        st.error(f"Could not generate PDF: {str(e)}")
     
     # Stats
     with st.expander("📈 Statistics"):
